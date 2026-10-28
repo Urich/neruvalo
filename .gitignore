@@ -1,0 +1,31 @@
+# Rust
+/target/
+
+# JavaScript
+node_modules/
+dist/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Editor and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Generated local data
+/local-data/
+/backups/
