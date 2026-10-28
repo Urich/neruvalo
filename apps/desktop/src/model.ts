@@ -17,7 +17,7 @@ export type Entry = {
 export type Profile = { id: string; login: string; server: string };
 export const types: Record<
   string,
-  { label: string; icon: string; fields: [string, string, boolean][] }
+  { label: string; icon: string; fields: [string, string, boolean, boolean?][] }
 > = {
   login: {
     label: "Логин и пароль",
@@ -52,7 +52,7 @@ export const types: Record<
       ["bank", "Банк", false],
       ["bic", "БИК", false],
       ["swift", "SWIFT", false],
-      ["details", "Реквизиты", true],
+      ["details", "Реквизиты", true, true],
     ],
   },
   api_token: {
@@ -69,8 +69,8 @@ export const types: Record<
     label: "SSH-ключ",
     icon: "⌁",
     fields: [
-      ["private", "Приватный ключ", true],
-      ["public", "Публичный ключ", false],
+      ["private", "Приватный ключ", true, true],
+      ["public", "Публичный ключ", false, true],
       ["passphrase", "Пароль ключа", true],
     ],
   },
@@ -92,10 +92,10 @@ export const types: Record<
     fields: [
       ["application", "Приложение / устройство", false],
       ["network", "Сети", false],
-      ["addresses", "Публичные адреса", false],
+      ["addresses", "Публичные адреса", false, true],
       ["seed", "Seed-фраза", true],
       ["passphrase", "Дополнительная passphrase", true],
-      ["private_keys", "Приватные ключи", true],
+      ["private_keys", "Приватные ключи", true, true],
     ],
   },
 };

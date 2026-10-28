@@ -628,25 +628,46 @@ export default function App() {
                           }
                         />
                       </label>
-                      {currentType.fields.map(([key, title, secret]) => (
-                        <label key={key}>
-                          {title}
-                          <input
-                            type={secret ? "password" : "text"}
-                            autoComplete="off"
-                            value={draft.fields[key] ?? ""}
-                            onChange={(e) =>
-                              setDraft({
-                                ...draft,
-                                fields: {
-                                  ...draft.fields,
-                                  [key]: e.target.value,
-                                },
-                              })
-                            }
-                          />
-                        </label>
-                      ))}
+                      {currentType.fields.map(
+                        ([key, title, secret, multiline]) => (
+                          <label key={key}>
+                            {title}
+                            {multiline ? (
+                              <textarea
+                                rows={4}
+                                className={secret ? "secret-input" : undefined}
+                                spellCheck={false}
+                                autoComplete="off"
+                                value={draft.fields[key] ?? ""}
+                                onChange={(e) =>
+                                  setDraft({
+                                    ...draft,
+                                    fields: {
+                                      ...draft.fields,
+                                      [key]: e.target.value,
+                                    },
+                                  })
+                                }
+                              />
+                            ) : (
+                              <input
+                                type={secret ? "password" : "text"}
+                                autoComplete="off"
+                                value={draft.fields[key] ?? ""}
+                                onChange={(e) =>
+                                  setDraft({
+                                    ...draft,
+                                    fields: {
+                                      ...draft.fields,
+                                      [key]: e.target.value,
+                                    },
+                                  })
+                                }
+                              />
+                            )}
+                          </label>
+                        ),
+                      )}
                       <label>
                         Заметки
                         <textarea
