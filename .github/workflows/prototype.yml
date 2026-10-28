@@ -61,8 +61,39 @@ jobs:
       - run: cargo check --locked -p neruvalo-desktop --features desktop
       - name: Build desktop executable
         run: cargo build --locked -p neruvalo-desktop --features desktop,custom-protocol
+      - name: Build server and console client
+        run: cargo build --locked -p neruvalo-server -p neruvalo-client
+      - name: Check Windows server startup
+        shell: pwsh
+        run: |
+          $data = Join-Path $env:RUNNER_TEMP ('neruvalo-' + [guid]::NewGuid())
+          New-Item -ItemType Directory -Path $data | Out-Null
+          $env:NERUVALO_DEV_MODE = 'true'
+          $env:DATABASE_URL = 'sqlite://' + (Join-Path $data 'server.sqlite3').Replace('\', '/') + '?mode=rwc'
+          $env:NERUVALO_DEV_OUTBOX = Join-Path $data 'mail'
+          $env:NERUVALO_LISTEN = '127.0.0.1:18787'
+          $server = Start-Process target/debug/neruvalo-server.exe -PassThru
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 40; $attempt++) {
+              try {
+                $null = Invoke-RestMethod http://127.0.0.1:18787/health -TimeoutSec 1
+                $ready = $true
+                break
+              } catch { Start-Sleep -Milliseconds 250 }
+            }
+            if (-not $ready) { throw 'Windows server failed its health check' }
+          } finally {
+            if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
+          }
+      - name: Prepare portable prototype
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path prototype-package | Out-Null
+          Copy-Item target/debug/neruvalo-desktop.exe,target/debug/neruvalo-server.exe,target/debug/neruvalo-cli.exe prototype-package
+          Copy-Item installer/start-dev-server.cmd,docs/prototype.ru.md prototype-package
       - uses: actions/upload-artifact@v4
         with:
           name: neruvalo-windows-prototype
-          path: target/debug/neruvalo-desktop.exe
+          path: prototype-package/
           retention-days: 14
