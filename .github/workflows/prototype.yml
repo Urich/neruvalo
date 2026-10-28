@@ -63,6 +63,8 @@ jobs:
         run: cargo build --locked -p neruvalo-desktop --features desktop,custom-protocol
       - name: Build server and console client
         run: cargo build --locked -p neruvalo-server -p neruvalo-client
+      - name: Windows end-to-end tests
+        run: cargo test --locked -p neruvalo-client --test end_to_end -- --test-threads=1
       - name: Check Windows server startup
         shell: pwsh
         run: |
@@ -72,16 +74,20 @@ jobs:
           $env:DATABASE_URL = 'sqlite://' + (Join-Path $data 'server.sqlite3').Replace('\', '/') + '?mode=rwc'
           $env:NERUVALO_DEV_OUTBOX = Join-Path $data 'mail'
           $env:NERUVALO_LISTEN = '127.0.0.1:18787'
-          $server = Start-Process target/debug/neruvalo-server.exe -PassThru
+          $stdout = Join-Path $data 'stdout.log'
+          $stderr = Join-Path $data 'stderr.log'
+          $server = Start-Process -FilePath (Resolve-Path target/debug/neruvalo-server.exe) -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           try {
             $ready = $false
             for ($attempt = 0; $attempt -lt 40; $attempt++) {
+              if ($server.HasExited) { break }
               try {
-                $null = Invoke-RestMethod http://127.0.0.1:18787/health -TimeoutSec 1
+                $null = Invoke-RestMethod http://127.0.0.1:18787/health -TimeoutSec 1 -NoProxy
                 $ready = $true
                 break
               } catch { Start-Sleep -Milliseconds 250 }
             }
+            Get-Content $stdout,$stderr -ErrorAction SilentlyContinue
             if (-not $ready) { throw 'Windows server failed its health check' }
           } finally {
             if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
