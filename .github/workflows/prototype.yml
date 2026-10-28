@@ -1,0 +1,68 @@
+name: Prototype checks
+on:
+  push:
+    branches: ['prototype/**']
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: neruvalo
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: neruvalo_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --workspace --exclude neruvalo-desktop --all-targets -- -D warnings
+      - run: cargo test --locked --workspace --exclude neruvalo-desktop
+      - name: PostgreSQL integration
+        env:
+          NERUVALO_TEST_DATABASE_URL: postgres://neruvalo:test-only-password@localhost:5432/neruvalo_test
+        run: cargo test --locked -p neruvalo-client --test end_to_end -- --test-threads=1
+  ui:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: apps/desktop
+      - run: npm run build
+        working-directory: apps/desktop
+      - run: cargo check --locked -p neruvalo-desktop --features desktop
+      - name: Build desktop executable
+        run: cargo build --locked -p neruvalo-desktop --features desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neruvalo-windows-prototype
+          path: target/debug/neruvalo-desktop.exe
+          retention-days: 14

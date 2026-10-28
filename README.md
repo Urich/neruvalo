@@ -1,31 +1,45 @@
 # Neruvalo
 
-An open-source, self-hosted password and secrets manager.
+An open-source, self-hosted password and secrets manager built with Rust, React and Tauri.
 
-**Status: design stage. There is no working application or server installer yet. Do not use this repository to store real secrets.**
+**Status: early development prototype. Test data only. No production security audit.**
 
-## Planned capabilities
+## Try the prototype
 
-- Windows desktop client built with React, TypeScript, Tauri and a shared Rust core.
-- Rust server with SQLite or PostgreSQL.
-- Client-side encryption and OPAQUE authentication.
-- Multiple accounts and servers in one client.
-- Offline read-only access to a local encrypted SQLite cache.
-- Owner-only version history and read-only shared copies that follow the original.
-- Logins, payment cards, secure notes, bank accounts, API tokens, SSH keys, documents and cryptocurrency wallet secrets.
-- KeePass and Bitwarden import; password-encrypted native export/import.
-- Interactive Linux server installation script; Docker Compose is the proposed deployment method.
-- Linux, Android and iOS clients planned after Windows.
+Work is on [`prototype/desktop-core`](https://github.com/Urich/neruvalo/tree/prototype/desktop-core). Changes are not merged into `main` without the repository owner's request.
 
-Browser access and browser autofill extensions are deferred. Software updates are installed by users; backups are managed externally.
+- [Run the server, Windows desktop client or native CLI (Russian)](docs/prototype.ru.md)
+- [Full product specification (Russian)](docs/specification.ru.md)
 
-## Documentation
+Implemented: real OPAQUE authentication, client-side authenticated encryption, signed record history, version conflicts, archive/restore, encrypted SQLite offline read-only cache and recovery certificates. The desktop UI includes all eight agreed secret types.
 
-- [Project specification (Russian)](docs/specification.ru.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security](SECURITY.md)
+The server deliberately runs on loopback in development mode. Email verification uses a private local outbox. Production SMTP/CAPTCHA, sharing, imports/exports, Windows Hello and mobile clients are not implemented yet. See the prototype guide for the exact status.
 
-This is a monorepo for the server, clients, protocol and shared cryptographic core. Components can have independent release versions.
+## Architecture
+
+- Shared Rust cryptographic and client core.
+- React/TypeScript desktop UI packaged with Tauri; no remotely loaded application code.
+- Rust/Axum server, SQLite or PostgreSQL through SQLx.
+- SQLite local cache containing encrypted versions.
+- Monorepo with independently versioned future components.
+
+Software updates are installed by users. Backups are managed externally. Browser access and autofill extensions are deferred.
+
+## Development
+
+```bash
+cargo test --locked --workspace --exclude neruvalo-desktop
+cd apps/desktop
+npm ci
+npm test
+npm run build
+```
+
+System dependencies are required for the Tauri shell; consult the [run guide](docs/prototype.ru.md).
+
+## Contributing and security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Never commit real vault data, keys or recovery files.
 
 ## License
 

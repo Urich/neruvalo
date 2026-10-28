@@ -1,0 +1,18 @@
+[package]
+name = "neruvalo-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+sqlx.workspace = true
+opaque-ke.workspace = true
+neruvalo-crypto.workspace = true
+neruvalo-protocol.workspace = true
+axum = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,6 +1,6 @@
 # Security
 
-Neruvalo is in the design stage. No production release exists, and the proposed cryptographic design has not undergone an independent audit.
+Neruvalo is in the early prototype stage. No production release exists, and the proposed cryptographic design has not undergone an independent audit.
 
 Do not use a prototype for real passwords, payment cards, wallet recovery phrases or private keys.
 

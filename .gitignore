@@ -29,3 +29,7 @@ Thumbs.db
 # Generated local data
 /local-data/
 /backups/
+
+# Tauri generated schemas and recovery certificates
+/apps/desktop/src-tauri/gen/
+*-recovery.json

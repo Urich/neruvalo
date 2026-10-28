@@ -1,0 +1,28 @@
+[workspace]
+members = ["crates/crypto", "crates/protocol", "crates/server", "crates/client-core", "apps/desktop/src-tauri"]
+default-members = ["crates/crypto", "crates/protocol", "crates/server", "crates/client-core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/Urich/neruvalo"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "any", "sqlite", "postgres"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+zeroize = { version = "1", features = ["derive"] }
+base64 = "0.22"
+sha2 = "0.10"
+opaque-ke = { version = "=4.0.1", features = ["argon2"] }
+argon2 = "0.5"
+neruvalo-crypto = { path = "crates/crypto" }
+neruvalo-protocol = { path = "crates/protocol" }
+neruvalo-client = { path = "crates/client-core" }
+neruvalo-server = { path = "crates/server" }
