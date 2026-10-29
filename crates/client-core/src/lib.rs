@@ -167,6 +167,20 @@ async fn response<T: serde::de::DeserializeOwned>(r: reqwest::Response) -> Resul
     }
     Ok(serde_json::from_slice(&bytes)?)
 }
+/// Build a SQLite URL without interpreting a Windows drive as a URL authority.
+/// Encoding the entire filename also preserves Unicode, spaces, `%`, `#` and `?`.
+pub fn sqlite_database_url(path: &Path) -> Result<String> {
+    let filename = path
+        .to_str()
+        .ok_or_else(|| anyhow!("DATABASE_PATH_NOT_UTF8"))?;
+    let encoded: String = filename
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect();
+    Ok(format!("sqlite:{encoded}?mode=rwc"))
+}
+
 async fn cache(dir: &Path, id: &str) -> Result<AnyPool> {
     sqlx::any::install_default_drivers();
     let folder = dir.join(id);
@@ -179,7 +193,7 @@ async fn cache(dir: &Path, id: &str) -> Result<AnyPool> {
     let db = folder.join("cache.sqlite3");
     let pool = AnyPoolOptions::new()
         .max_connections(1)
-        .connect(&format!("sqlite://{}?mode=rwc", db.to_string_lossy()))
+        .connect(&sqlite_database_url(&db)?)
         .await?;
     sqlx::raw_sql("CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY,record_id TEXT NOT NULL,revision BIGINT NOT NULL,body TEXT NOT NULL);").execute(&pool).await?;
     if let Some(row) = sqlx::query("SELECT value FROM meta WHERE name='schema_version'")

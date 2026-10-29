@@ -56,6 +56,13 @@ cargo run --locked -p neruvalo-server
 
 Сервер слушает только `127.0.0.1:8787`. Код намеренно отказывается от внешнего listener, поскольку SMTP, CAPTCHA и производственная политика доступа ещё не реализованы. Не отключать эту защиту ради публикации прототипа в интернете.
 
+Для абсолютного пути Windows используйте форму `sqlite:C:/Neruvalo/server.sqlite3?mode=rwc` без `//` перед буквой диска. Для пути со специальными символами безопаснее сформировать строку так:
+
+```powershell
+$databaseFile = Join-Path $PWD 'local-data/server.sqlite3'
+$env:DATABASE_URL = 'sqlite:' + [Uri]::EscapeDataString($databaseFile) + '?mode=rwc'
+```
+
 ## Сервер на Linux
 
 ```bash

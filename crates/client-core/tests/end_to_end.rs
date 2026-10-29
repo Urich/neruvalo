@@ -22,8 +22,9 @@ fn data(title: &str, secret: &str) -> RecordData {
     }
 }
 async fn start(dir: &Path) -> (String, tokio::task::JoinHandle<()>) {
-    let url = std::env::var("NERUVALO_TEST_DATABASE_URL")
-        .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", dir.join("server.sqlite3").display()));
+    let url = std::env::var("NERUVALO_TEST_DATABASE_URL").unwrap_or_else(|_| {
+        neruvalo_client::sqlite_database_url(&dir.join("server.sqlite3")).unwrap()
+    });
     if std::env::var("NERUVALO_TEST_DATABASE_URL").is_ok() {
         sqlx::any::install_default_drivers();
         let pool = sqlx::AnyPool::connect(&url).await.unwrap();
@@ -78,7 +79,7 @@ async fn encrypted_lifecycle_conflict_offline_recovery_and_server_restart() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     let (server, handle) = start(root).await;
-    let mut a = Client::new(root.join("client-a")).unwrap();
+    let mut a = Client::new(root.join("Client A #50% Пример")).unwrap();
     let certificate = register(&mut a, &server, "alice", root).await.unwrap();
     assert!(a
         .login(&server, "alice", Zeroizing::new("wrong password".into()))

@@ -71,7 +71,7 @@ jobs:
           $data = Join-Path $env:RUNNER_TEMP ('neruvalo-' + [guid]::NewGuid())
           New-Item -ItemType Directory -Path $data | Out-Null
           $env:NERUVALO_DEV_MODE = 'true'
-          $env:DATABASE_URL = 'sqlite://' + (Join-Path $data 'server.sqlite3').Replace('\', '/') + '?mode=rwc'
+          $env:DATABASE_URL = 'sqlite:' + [Uri]::EscapeDataString((Join-Path $data 'server.sqlite3')) + '?mode=rwc'
           $env:NERUVALO_DEV_OUTBOX = Join-Path $data 'mail'
           $env:NERUVALO_LISTEN = '127.0.0.1:18787'
           $stdout = Join-Path $data 'stdout.log'
