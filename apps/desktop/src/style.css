@@ -637,3 +637,27 @@ h3 {
   -webkit-text-security: disc;
   font-family: monospace;
 }
+
+.discard-dialog {
+  width: min(520px, calc(100vw - 40px));
+  padding: 28px;
+  border: 1px solid #dce3dd;
+  border-radius: 14px;
+  color: #233d36;
+  background: #fff;
+  box-shadow: 0 20px 70px #1b352540;
+}
+.discard-dialog::backdrop {
+  background: #19372d66;
+}
+.discard-dialog p {
+  line-height: 1.7;
+  color: #61746b;
+}
+.discard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 24px;
+}

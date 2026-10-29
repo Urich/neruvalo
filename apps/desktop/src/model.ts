@@ -42,7 +42,7 @@ export const types: Record<
       ["pin", "PIN", true],
     ],
   },
-  note: { label: "Защищённая заметка", icon: "▧", fields: [] },
+  note: { label: "Заметка", icon: "▧", fields: [] },
   bank_account: {
     label: "Банковский счёт",
     icon: "▥",

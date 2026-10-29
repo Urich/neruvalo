@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HistoryVersion } from "./HistoryVersion";
+import { ConfirmNewEntry } from "./ConfirmNewEntry";
 import {
   Data,
   Entry,
@@ -39,6 +40,10 @@ export default function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [selected, setSelected] = useState<Entry>();
   const [draft, setDraft] = useState<Data>();
+  const [pendingNew, setPendingNew] = useState<{
+    kind: string;
+    epoch: number;
+  } | null>(null);
   const [history, setHistory] = useState<Entry[]>([]);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("");
@@ -60,6 +65,7 @@ export default function App() {
     setEntries([]);
     setSelected(undefined);
     setDraft(undefined);
+    setPendingNew(null);
     setHistory([]);
     setPassword("");
     setRevealed({});
@@ -143,6 +149,32 @@ export default function App() {
     setHistory([]);
     setRevealed({});
   }
+  function beginNew(recordType: string) {
+    setSelected(undefined);
+    setHistory([]);
+    setRevealed({});
+    setDraft(empty(recordType));
+  }
+  function requestNew() {
+    if (draft) {
+      setPendingNew({ kind: kind || "login", epoch: generation.current });
+      return;
+    }
+    beginNew(kind || "login");
+  }
+  function confirmNew() {
+    const pending = pendingNew;
+    setPendingNew(null);
+    if (
+      !pending ||
+      pending.epoch !== generation.current ||
+      !status.unlocked ||
+      !status.online ||
+      busy
+    )
+      return;
+    beginNew(pending.kind);
+  }
   async function signIn() {
     await run(async () => {
       if (certReady) throw new Error("Сначала сохраните мастер-сертификат.");
@@ -224,6 +256,12 @@ export default function App() {
   const currentType = types[(draft ?? selected?.data)?.record_type ?? "login"];
   return (
     <div className="app">
+      {status.unlocked && pendingNew && (
+        <ConfirmNewEntry
+          onCancel={() => setPendingNew(null)}
+          onConfirm={confirmNew}
+        />
+      )}
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">n</span>
@@ -533,11 +571,7 @@ export default function App() {
                 <button
                   className="primary"
                   disabled={busy || !status.online}
-                  onClick={() => {
-                    setSelected(undefined);
-                    setHistory([]);
-                    setDraft(empty(kind || "login"));
-                  }}
+                  onClick={requestNew}
                 >
                   ＋ Добавить запись
                 </button>
