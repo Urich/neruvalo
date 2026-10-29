@@ -10,7 +10,6 @@ import { ContextMenu, MenuItem } from "./ContextMenu";
 import { foldersOf, inFolder } from "./folders";
 import { fieldsOf, documentTemplates, templateLabels } from "./documents";
 import {
-  defaultShortcuts,
   Shortcuts,
   readLocal,
   writeLocal,
@@ -172,11 +171,7 @@ export default function App() {
       .catch((e) => setError(errorText(e)));
     call<Profile[]>("profiles")
       .then(setProfiles)
-      .catch(() =>
-        setError(
-          "Откройте приложение через Tauri. Страница в браузере не является клиентом Neruvalo.",
-        ),
-      );
+      .catch((e) => setError(errorText(e)));
     const timer = setInterval(() => {
       call<Status>("status")
         .then((s) => {
@@ -833,11 +828,16 @@ export default function App() {
                           <option value="">{t("Онлайн-вход")}</option>
                           {accessibleProfiles.map((p) => (
                             <option value={p.id} key={p.id}>
-                              {p.login}
-                              {t("· офлайн")}
+                              {p.login} · {p.server} {t("· офлайн")}
                             </option>
                           ))}
                         </select>
+                      </label>
+                    )}
+                    {offline && (
+                      <label>
+                        {t("Сервер")}
+                        <input readOnly value={server} dir="ltr" />
                       </label>
                     )}
                     {!offline && (
@@ -1036,8 +1036,8 @@ export default function App() {
                   <div className="list-caption">
                     {t(kind ? types[kind].label : t("Все типы"))}
                     <span>
-                      {new Intl.NumberFormat(language).format(visible.length)}{" "}
-                      {t("Записи")}
+                      {t("Записи")}:{" "}
+                      {new Intl.NumberFormat(language).format(visible.length)}
                     </span>
                   </div>
                   {visible.length ? (
