@@ -4,6 +4,7 @@ import { createRoot, Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { empty } from "./model";
+import { setPreference } from "./i18n";
 
 const native = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -64,6 +65,7 @@ function title() {
 }
 
 beforeEach(async () => {
+  setPreference("ru");
   root = undefined;
   host = undefined;
   native.unlocked = false;

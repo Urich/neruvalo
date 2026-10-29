@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Entry, types } from "./model";
-
+import { Entry } from "./model";
+import { fieldsOf } from "./documents";
+import { useI18n } from "./i18n";
 export function HistoryVersion({
   entry,
   disabled,
@@ -10,20 +11,21 @@ export function HistoryVersion({
   disabled: boolean;
   onRestore: () => void;
 }) {
+  const { t } = useI18n();
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
-  const fields = types[entry.data.record_type]?.fields ?? [];
+  const fields = fieldsOf(entry.data);
   return (
     <details className="history-version">
       <summary>
-        Версия {entry.revision} · {entry.data.title}
-        {entry.archived ? " · в архиве" : ""}
+        {t("Версия")} {entry.revision} · {entry.data.title}
+        {entry.archived ? t(" · в архиве") : ""}
       </summary>
       {fields.map(([key, label, secret]) => {
         const value = entry.data.fields[key];
         if (!value) return null;
         return (
           <div className="field" key={key}>
-            <small>{label}</small>
+            <small>{key.startsWith("custom:") ? label : t(label)}</small>
             <div>
               <code>{secret && !revealed[key] ? "••••••••••••" : value}</code>
               {secret && (
@@ -34,7 +36,7 @@ export function HistoryVersion({
                     setRevealed({ ...revealed, [key]: !revealed[key] })
                   }
                 >
-                  {revealed[key] ? "Скрыть" : "Показать"}
+                  {revealed[key] ? t("Скрыть") : t("Показать")}
                 </button>
               )}
             </div>
@@ -43,11 +45,15 @@ export function HistoryVersion({
       })}
       {entry.data.notes && (
         <div className="field">
-          <small>Заметки</small>
+          <small>{t("Заметки")}</small>
           <p className="pre">{entry.data.notes}</p>
         </div>
       )}
-      {entry.data.folder && <p className="pre">Папка: {entry.data.folder}</p>}
+      {entry.data.folder && (
+        <p className="pre">
+          {t("Папка:")} <bdi>{entry.data.folder}</bdi>
+        </p>
+      )}
       <div className="tags">
         {entry.data.tags.map((tag) => (
           <span key={tag}>{tag}</span>
@@ -59,7 +65,7 @@ export function HistoryVersion({
         disabled={disabled}
         onClick={onRestore}
       >
-        Восстановить новой версией
+        {t("Восстановить новой версией")}
       </button>
     </details>
   );

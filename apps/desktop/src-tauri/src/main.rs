@@ -13,10 +13,14 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
+mod launch;
 #[cfg(windows)]
 mod windows_lock;
 struct Desktop {
     client: Mutex<Client>,
+    pinned_server: Option<String>,
+    startup_error: Option<String>,
+    history_path: PathBuf,
     clipboard_generation: Arc<AtomicU64>,
 }
 fn text(r: &Value, key: &str) -> Result<String> {
@@ -38,9 +42,56 @@ async fn command(
     mut request: Value,
 ) -> Result<Value, String> {
     async fn dispatch(app: &tauri::AppHandle, state: &Desktop, r: &mut Value) -> Result<Value> {
+        let action = text(r, "action")?;
+        if action == "launch_config" {
+            let mut config = launch::config(
+                &state.history_path,
+                state.pinned_server.as_deref(),
+                state.startup_error.as_deref(),
+            )?;
+            let mut servers: Vec<String> = serde_json::from_value(config["servers"].clone())?;
+            for profile in state.client.lock().await.profiles().await? {
+                if let Some(server) = profile["server"].as_str() {
+                    if let Ok(server) = launch::check_server(None, server) {
+                        if !servers.contains(&server) {
+                            servers.push(server);
+                        }
+                    }
+                }
+            }
+            config["servers"] = json!(servers);
+            return Ok(config);
+        }
+        if let Some(error) = &state.startup_error {
+            anyhow::bail!("Invalid launch configuration: {error}");
+        }
         let mut c = state.client.lock().await;
+        if matches!(
+            action.as_str(),
+            "login" | "register_begin" | "register_finish"
+        ) {
+            launch::check_server(state.pinned_server.as_deref(), &text(r, "server")?)?;
+        }
+        if action == "unlock_offline" {
+            let profiles = c.profiles().await?;
+            let id = text(r, "id")?;
+            let p = profiles
+                .iter()
+                .find(|p| p["id"].as_str() == Some(&id))
+                .ok_or_else(|| anyhow!("Profile not found"))?;
+            launch::check_server(
+                state.pinned_server.as_deref(),
+                p["server"].as_str().unwrap_or(""),
+            )?;
+        }
         match text(r, "action")?.as_str() {
-            "profiles" => Ok(serde_json::to_value(c.profiles().await?)?),
+            "profiles" => {
+                let mut profiles = c.profiles().await?;
+                if let Some(server) = &state.pinned_server {
+                    profiles.retain(|p| p["server"].as_str() == Some(server.as_str()));
+                }
+                Ok(serde_json::to_value(profiles)?)
+            }
             "status" => Ok(c.status()),
             "touch" => {
                 c.touch()?;
@@ -68,8 +119,11 @@ async fn command(
             }
             "login" => {
                 let password = secret(r, "password")?;
-                c.login(&text(r, "server")?, &text(r, "login")?, password)
-                    .await
+                let server = text(r, "server")?;
+                let result = c.login(&server, &text(r, "login")?, password).await?;
+                // History contains only normalized public origins after successful online login.
+                launch::remember_server(&state.history_path, &server)?;
+                Ok(result)
             }
             "unlock_offline" => {
                 let password = secret(r, "password")?;
@@ -127,9 +181,12 @@ async fn command(
                     std::fs::metadata(&path)?.len() <= 65536,
                     "Certificate too large"
                 );
-                c.recover(Zeroizing::new(std::fs::read_to_string(path)?), password)
-                    .await
+                let certificate = Zeroizing::new(std::fs::read_to_string(path)?);
+                let parsed: Value = serde_json::from_str(&certificate)?;
+                launch::check_server(state.pinned_server.as_deref(), &text(&parsed, "server")?)?;
+                c.recover(certificate, password).await
             }
+            "read_clipboard" => Ok(json!(arboard::Clipboard::new()?.get_text()?)),
             "copy_field" => {
                 let seconds = r["seconds"].as_u64().unwrap_or(30);
                 anyhow::ensure!(seconds <= 3600, "Invalid clipboard timeout");
@@ -143,6 +200,7 @@ async fn command(
                         .ok_or_else(|| anyhow!("Field not found"))?
                         .clone(),
                 );
+                anyhow::ensure!(!value.is_empty(), "Field is empty");
                 arboard::Clipboard::new()?.set_text(value.as_str())?;
                 let sequence = state.clipboard_generation.fetch_add(1, Ordering::SeqCst) + 1;
                 if seconds > 0 {
@@ -175,7 +233,15 @@ fn main() {
                 Ok(p) => PathBuf::from(p),
                 Err(_) => app.path().app_local_data_dir()?,
             };
+            let (pinned_server, startup_error) =
+                match launch::pinned_server(std::env::args().skip(1)) {
+                    Ok(server) => (server, None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
             app.manage(Desktop {
+                history_path: dir.join("servers.json"),
+                pinned_server,
+                startup_error,
                 client: Mutex::new(Client::new(dir)?),
                 clipboard_generation: Arc::new(AtomicU64::new(0)),
             });

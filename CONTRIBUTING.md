@@ -10,4 +10,4 @@ The project is currently in its prototype stage. Start with [the specification](
 - Build and test instructions are in [the prototype guide](docs/prototype.ru.md).
 - Commit implementation work to a feature branch. Do not commit to or merge into `main` unless Urich explicitly requests it.
 
-During the current design iteration, do not run builds or create packages until Urich requests resuming them. Use `[skip ci]` on commits to avoid triggering automatic build workflows.
+During design-only iterations, respect any build pause requested by Urich and use `[skip ci]` for documentation commits. Urich explicitly resumed implementation and builds on 2026-10-29; feature-branch builds are authorized.

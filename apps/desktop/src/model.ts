@@ -21,7 +21,7 @@ export const types: Record<
 > = {
   login: {
     label: "Логин и пароль",
-    icon: "◈",
+    icon: "login",
     fields: [
       ["login", "Логин", false],
       ["password", "Пароль", true],
@@ -31,7 +31,7 @@ export const types: Record<
   },
   bank_card: {
     label: "Банковская карта",
-    icon: "▤",
+    icon: "bank_card",
     fields: [
       ["number", "Номер карты", true],
       ["holder", "Держатель", false],
@@ -42,10 +42,10 @@ export const types: Record<
       ["pin", "PIN", true],
     ],
   },
-  note: { label: "Заметка", icon: "▧", fields: [] },
+  note: { label: "Заметка", icon: "note", fields: [] },
   bank_account: {
     label: "Банковский счёт",
-    icon: "▥",
+    icon: "bank_account",
     fields: [
       ["holder", "Владелец", false],
       ["number", "Номер счёта / IBAN", true],
@@ -57,7 +57,7 @@ export const types: Record<
   },
   api_token: {
     label: "API-ключ / токен",
-    icon: "⌘",
+    icon: "api_token",
     fields: [
       ["secret", "Ключ / токен", true],
       ["service", "Сервис", false],
@@ -67,7 +67,7 @@ export const types: Record<
   },
   ssh_key: {
     label: "SSH-ключ",
-    icon: "⌁",
+    icon: "ssh_key",
     fields: [
       ["private", "Приватный ключ", true, true],
       ["public", "Публичный ключ", false, true],
@@ -76,9 +76,10 @@ export const types: Record<
   },
   document: {
     label: "Документ",
-    icon: "▣",
+    icon: "document",
     fields: [
       ["kind", "Тип документа", false],
+      ["country", "Страна / организация", false],
       ["number", "Номер", true],
       ["holder", "Владелец", false],
       ["issuer", "Кем выдан", false],
@@ -88,7 +89,7 @@ export const types: Record<
   },
   crypto_wallet: {
     label: "Криптокошелёк",
-    icon: "◇",
+    icon: "crypto_wallet",
     fields: [
       ["application", "Приложение / устройство", false],
       ["network", "Сети", false],
@@ -125,7 +126,19 @@ export function filterEntries(
   );
 }
 export function errorText(error: unknown): string {
-  const s = String(error);
+  const s = error instanceof Error ? error.message : String(error);
+  if (s.includes("SERVER_PIN_MISMATCH"))
+    return "Этот аккаунт или сертификат относится к другому серверу.";
+  if (s.includes("ACCOUNT_EXISTS"))
+    return "Аккаунт с таким логином или email уже существует.";
+  if (s.includes("INVALID_EMAIL_CODE"))
+    return "Неверный или просроченный код подтверждения.";
+  if (s.includes("RATE_LIMITED"))
+    return "Слишком много запросов. Повторите позже.";
+  if (s.includes("SERVER_ID_CHANGED") || s.includes("SERVER_KEY_CHANGED") || s.includes("PUBLIC_KEY_MISMATCH") || s.includes("ACCOUNT_CHANGED"))
+    return "Сервер или ключи аккаунта изменились. Вход остановлен.";
+  if (s.includes("UNSUPPORTED_"))
+    return "Версия сервера или данных не поддерживается.";
   if (s.includes("RECORD_VERSION_MISMATCH"))
     return "Запись изменена на другом устройстве. Синхронизируйте устройства.";
   if (s.includes("SYNCHRONIZATION_REQUIRED"))
@@ -135,5 +148,5 @@ export function errorText(error: unknown): string {
   if (s.includes("OFFLINE_READ_ONLY"))
     return "Офлайн доступен только просмотр.";
   if (s.includes("LOCKED")) return "Хранилище заблокировано.";
-  return s;
+  return /^[A-Z][A-Z_]{3,}$/.test(s) ? "Операция не выполнена. Проверьте соединение и повторите." : s;
 }

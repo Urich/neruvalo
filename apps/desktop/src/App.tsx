@@ -3,6 +3,23 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HistoryVersion } from "./HistoryVersion";
 import { ConfirmNewEntry } from "./ConfirmNewEntry";
+import { useI18n, setSystemLocale } from "./i18n";
+import { Icon } from "./Icon";
+import { Settings } from "./Settings";
+import { ContextMenu, MenuItem } from "./ContextMenu";
+import { foldersOf, inFolder } from "./folders";
+import { fieldsOf, documentTemplates, templateLabels } from "./documents";
+import {
+  defaultShortcuts,
+  Shortcuts,
+  readLocal,
+  writeLocal,
+  loadShortcuts,
+  sameShortcut,
+  fromEvent,
+  shortcutText,
+  isMobile,
+} from "./preferences";
 import {
   Data,
   Entry,
@@ -25,9 +42,31 @@ async function call<T = any>(
   return invoke("command", { request: { action, ...args } });
 }
 export default function App() {
+  const { t, language } = useI18n();
+  const [page, setPage] = useState<"vault" | "settings">("vault");
+  const [folder, setFolder] = useState<string | null>(null);
+  const [newFolder, setNewFolder] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [launch, setLaunch] = useState<{
+    pinned_server?: string;
+    startup_error?: string;
+    servers: string[];
+  }>({ servers: [] });
+  const [configured, setConfigured] = useState(false);
+  const [otherServer, setOtherServer] = useState(false);
+  const [shortcuts, setShortcuts] = useState<Shortcuts>(() => loadShortcuts());
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    items: MenuItem[];
+  } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{
+    epoch: number;
+    action: () => void;
+  } | null>(null);
   const [status, setStatus] = useState<Status>({ unlocked: false });
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [server, setServer] = useState("http://127.0.0.1:8787");
+  const [server, setServer] = useState("");
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
@@ -54,7 +93,9 @@ export default function App() {
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [needsSync, setNeedsSync] = useState(false);
   const [timeout, setTimeoutSeconds] = useState(60);
-  const [clipboardSeconds, setClipboardSeconds] = useState(30);
+  const [clipboardSeconds, setClipboardSeconds] = useState<number>(() =>
+    readLocal("neruvalo.clipboardSeconds", 30),
+  );
   const generation = useRef(0);
   const lastTouch = useRef(0);
   const wasUnlocked = useRef(false);
@@ -66,6 +107,15 @@ export default function App() {
     setSelected(undefined);
     setDraft(undefined);
     setPendingNew(null);
+    setPendingAction(null);
+    setMenu(null);
+    setPage("vault");
+    setFolder(null);
+    setCustomName("");
+    setNewFolder(false);
+    setQuery("");
+    setKind("");
+    setOffline("");
     setHistory([]);
     setPassword("");
     setRevealed({});
@@ -73,12 +123,14 @@ export default function App() {
     setCertReady(false);
   };
   async function run(task: () => Promise<void>) {
+    const epoch = generation.current;
     setBusy(true);
     setError("");
     setNotice("");
     try {
       await task();
     } catch (e) {
+      if (epoch !== generation.current) return;
       setError(errorText(e));
       if (
         String(e).includes("RECORD_VERSION_MISMATCH") ||
@@ -104,6 +156,20 @@ export default function App() {
     setEntries(list);
   }
   useEffect(() => {
+    call("launch_config")
+      .then((config) => {
+        if (!config) {
+          setConfigured(true);
+          return;
+        }
+        setLaunch(config);
+        if (config.locale) setSystemLocale(config.locale);
+        setServer(config.pinned_server ?? config.servers[0] ?? "");
+        setOtherServer(!config.servers.length);
+        if (config.startup_error) setError(config.startup_error);
+        setConfigured(true);
+      })
+      .catch((e) => setError(errorText(e)));
     call<Profile[]>("profiles")
       .then(setProfiles)
       .catch(() =>
@@ -143,7 +209,209 @@ export default function App() {
       window.removeEventListener("pointermove", touch);
     };
   }, [status.unlocked]);
+  function requestLeave(action: () => void) {
+    setMenu(null);
+    if (draft) {
+      setPendingAction({ epoch: generation.current, action });
+      return;
+    }
+    action();
+  }
+  async function copy(entry: Entry, field: string) {
+    if (!status.unlocked || busy || !entry.data.fields[field]) return;
+    const epoch = generation.current;
+    await run(async () => {
+      await call("copy_field", {
+        id: entry.record_id,
+        field,
+        seconds: clipboardSeconds,
+      });
+      if (epoch === generation.current) setNotice("Скопировано.");
+    });
+  }
+  const accessibleProfiles = profiles.filter(
+    (p) => !launch.pinned_server || p.server === launch.pinned_server,
+  );
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (
+        e.repeat ||
+        e.isComposing ||
+        !document.hasFocus() ||
+        !status.unlocked ||
+        draft ||
+        busy ||
+        menu ||
+        pendingNew ||
+        pendingAction ||
+        page !== "vault" ||
+        !selected ||
+        isMobile()
+      )
+        return;
+      if (
+        e.target instanceof Element &&
+        e.target.closest(
+          "input,textarea,select,[contenteditable],[data-shortcut-capture],dialog",
+        )
+      )
+        return;
+      const key = fromEvent(e);
+      for (const action of ["login", "password"] as const)
+        if (sameShortcut(key, shortcuts[action])) {
+          e.preventDefault();
+          void copy(selected, action);
+          break;
+        }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [
+    status.unlocked,
+    draft,
+    busy,
+    menu,
+    page,
+    selected,
+    shortcuts,
+    clipboardSeconds,
+    pendingNew,
+    pendingAction,
+  ]);
+  function context(e: React.MouseEvent | React.KeyboardEvent) {
+    e.preventDefault();
+    const target = e.target as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    const x = "clientX" in e ? e.clientX : rect.left,
+      y = "clientY" in e ? e.clientY : rect.bottom;
+    const epoch = generation.current;
+    const safe = (action: () => void) => () => {
+      if (epoch === generation.current) action();
+    };
+    let items: MenuItem[] = [];
+    if (target.matches("input,textarea,[contenteditable]")) {
+      const input = target as HTMLInputElement;
+      const start = input.selectionStart,
+        end = input.selectionEnd;
+      const edit = (command: string) =>
+        safe(() => {
+          input.focus();
+          if (start !== null && end !== null)
+            input.setSelectionRange(start, end);
+          document.execCommand(command);
+        });
+      items = [
+        { label: t("Отменить"), action: edit("undo") },
+        { label: t("Повторить"), action: edit("redo") },
+        {
+          label: t("Вырезать"),
+          disabled: input.readOnly || start === end,
+          action: edit("cut"),
+        },
+        {
+          label: t("Копировать"),
+          disabled: start === end,
+          action: edit("copy"),
+        },
+        {
+          label: t("Вставить"),
+          disabled: input.readOnly,
+          action: safe(() => {
+            void run(async () => {
+              const value = await call<string>("read_clipboard");
+              if (epoch !== generation.current) return;
+              input.focus();
+              if (start !== null && end !== null)
+                input.setSelectionRange(start, end);
+              document.execCommand("insertText", false, value);
+            });
+          }),
+        },
+        {
+          label: t("Выделить всё"),
+          action: safe(() => {
+            input.focus();
+            input.select();
+          }),
+        },
+      ];
+    } else if (status.unlocked) {
+      const row = target.closest<HTMLElement>("[data-record-id]");
+      const entry = row
+        ? entries.find((e) => e.record_id === row.dataset.recordId)
+        : target.closest(".detail-panel") && !draft
+          ? selected
+          : undefined;
+      if (entry) {
+        const record = entry;
+        const field =
+          target.closest<HTMLElement>("[data-field]")?.dataset.field;
+        const copyItem = (key: string, label: string): MenuItem => ({
+          label: t(label),
+          disabled: !record.data.fields[key],
+          hint:
+            !isMobile() && ["login", "password"].includes(key)
+              ? shortcutText(shortcuts[key as "login" | "password"])
+              : undefined,
+          action: safe(() => {
+            void copy(record, key);
+          }),
+        });
+        if (fieldsOf(record.data).some((f) => f[0] === "login"))
+          items.push(copyItem("login", t("Скопировать логин")));
+        if (fieldsOf(record.data).some((f) => f[0] === "password"))
+          items.push(copyItem("password", t("Скопировать пароль")));
+        if (field) items.push(copyItem(field, t("Копировать поле")));
+        items.push(
+          {
+            label: t("Открыть"),
+            action: safe(() => requestLeave(() => open(record))),
+          },
+          {
+            label: t("Редактировать"),
+            disabled: busy || !status.online || needsSync || record.archived,
+            action: safe(() =>
+              requestLeave(() => {
+                open(record);
+                setDraft(structuredClone(record.data));
+              }),
+            ),
+          },
+          {
+            label: t("История"),
+            disabled: busy,
+            action: safe(() =>
+              requestLeave(() => {
+                open(record);
+                void loadHistory(record);
+              }),
+            ),
+          },
+          {
+            label: t(record.archived ? t("Вернуть из архива") : t("В архив")),
+            disabled: busy || !status.online || needsSync,
+            action: safe(() =>
+              requestLeave(() => {
+                void setArchived(!record.archived, record);
+              }),
+            ),
+          },
+        );
+      }
+    }
+    if (items.length) setMenu({ x, y, items });
+    else setMenu(null);
+  }
+  async function loadHistory(entry: Entry) {
+    const epoch = generation.current;
+    await run(async () => {
+      const values = await call<Entry[]>("history", { id: entry.record_id });
+      if (epoch === generation.current) setHistory(values);
+    });
+  }
   function open(entry: Entry) {
+    setNewFolder(false);
+    setCustomName("");
     setSelected(entry);
     setDraft(undefined);
     setHistory([]);
@@ -153,7 +421,9 @@ export default function App() {
     setSelected(undefined);
     setHistory([]);
     setRevealed({});
-    setDraft(empty(recordType));
+    setNewFolder(false);
+    setCustomName("");
+    setDraft({ ...empty(recordType), folder: folder ?? "" });
   }
   function requestNew() {
     if (draft) {
@@ -177,6 +447,8 @@ export default function App() {
   }
   async function signIn() {
     await run(async () => {
+      if (!configured || launch.startup_error)
+        throw new Error("Проверьте параметры запуска");
       if (certReady) throw new Error("Сначала сохраните мастер-сертификат.");
       if (offline) await call("unlock_offline", { id: offline, password });
       else await call("login", { server, login, password });
@@ -184,6 +456,8 @@ export default function App() {
       setNeedsSync(false);
       await refresh();
       setProfiles(await call("profiles"));
+      const config = await call("launch_config");
+      if (config) setLaunch(config);
     });
   }
   async function register() {
@@ -230,7 +504,16 @@ export default function App() {
       await call("save", {
         id: selected?.record_id ?? null,
         expected_revision: selected?.revision ?? 0,
-        data: draft,
+        data: newFolder
+          ? {
+              ...draft,
+              folder: draft.folder
+                .split("/")
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .join("/"),
+            }
+          : draft,
         archived: selected?.archived ?? false,
       });
       setDraft(undefined);
@@ -238,13 +521,16 @@ export default function App() {
       await refresh();
     });
   }
-  async function setArchived(value: boolean) {
-    if (!selected) return;
+  async function setArchived(
+    value: boolean,
+    record: Entry | undefined = selected,
+  ) {
+    if (!record) return;
     await run(async () => {
       await call("save", {
-        id: selected.record_id,
-        expected_revision: selected.revision,
-        data: selected.data,
+        id: record.record_id,
+        expected_revision: record.revision,
+        data: record.data,
         archived: value,
       });
       setSelected(undefined);
@@ -252,10 +538,34 @@ export default function App() {
       await refresh();
     });
   }
-  const visible = filterEntries(entries, query, kind, archive);
+  const folders = foldersOf(entries);
+  const visible = filterEntries(entries, query, kind, archive).filter((e) =>
+    inFolder(e.data.folder, folder),
+  );
   const currentType = types[(draft ?? selected?.data)?.record_type ?? "login"];
   return (
-    <div className="app">
+    <div
+      className="app"
+      lang={language}
+      dir={language === "ar" ? "rtl" : "ltr"}
+      onContextMenu={context}
+      onKeyDown={(e) => {
+        if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))
+          context(e);
+      }}
+    >
+      {menu && <ContextMenu {...menu} close={() => setMenu(null)} />}
+      {status.unlocked && pendingAction && (
+        <ConfirmNewEntry
+          general
+          onCancel={() => setPendingAction(null)}
+          onConfirm={() => {
+            const pending = pendingAction;
+            setPendingAction(null);
+            if (pending.epoch === generation.current && !busy) pending.action();
+          }}
+        />
+      )}
       {status.unlocked && pendingNew && (
         <ConfirmNewEntry
           onCancel={() => setPendingNew(null)}
@@ -270,64 +580,124 @@ export default function App() {
           </div>
         </div>
         <div className="stage">PROTOTYPE · 0.1</div>
-        <div className="nav-label">ХРАНИЛИЩЕ</div>
+        {status.unlocked && (
+          <>
+            <div className="nav-label">{t("ХРАНИЛИЩЕ")}</div>
+            <button
+              className={!archive ? "nav active" : "nav"}
+              onClick={() => {
+                requestLeave(() => {
+                  setPage("vault");
+                  setArchive(false);
+                  setFolder(null);
+                  setKind("");
+                  setSelected(undefined);
+                  setDraft(undefined);
+                });
+              }}
+            >
+              <Icon name="all" /> <span>{t("Все записи")}</span>
+              <b>{entries.filter((e) => !e.archived).length}</b>
+            </button>
+            <button
+              className={archive ? "nav active" : "nav"}
+              onClick={() => {
+                requestLeave(() => {
+                  setPage("vault");
+                  setArchive(true);
+                  setSelected(undefined);
+                  setDraft(undefined);
+                });
+              }}
+            >
+              <Icon name="archive" /> <span>{t("Архив")}</span>
+            </button>
+            <div className="nav-label">{t("Папки")}</div>
+            <button
+              className={folder === "" ? "nav active" : "nav"}
+              onClick={() => {
+                setPage("vault");
+                setFolder("");
+              }}
+            >
+              <Icon name="folder" />
+              <span>{t("Без папки")}</span>
+            </button>
+            {folders.map((path) => (
+              <button
+                key={path}
+                title={path}
+                className={folder === path ? "nav active" : "nav"}
+                onClick={() => {
+                  setPage("vault");
+                  setFolder(path);
+                }}
+              >
+                <Icon name="folder" />
+                <span dir="auto">{path}</span>
+              </button>
+            ))}
+            <div className="nav-label">{t("ТИПЫ ЗАПИСЕЙ")}</div>
+            {Object.entries(types).map(([key]) => (
+              <button
+                key={key}
+                className={kind === key ? "nav active" : "nav"}
+                onClick={() => {
+                  setPage("vault");
+                  setKind(kind === key ? "" : key);
+                }}
+              >
+                <Icon name={key} />
+                <span>
+                  {t(key === "document" ? t("Документы") : types[key].label)}
+                </span>
+              </button>
+            ))}
+          </>
+        )}
         <button
-          className={!archive ? "nav active" : "nav"}
-          onClick={() => {
-            setArchive(false);
-            setSelected(undefined);
-          }}
+          className={page === "settings" ? "nav active" : "nav"}
+          onClick={() => setPage(page === "settings" ? "vault" : "settings")}
         >
-          ◈ <span>Все записи</span>
-          <b>{entries.filter((e) => !e.archived).length}</b>
+          <Icon name="settings" />
+          <span>{t("Настройки")}</span>
         </button>
-        <button
-          className={archive ? "nav active" : "nav"}
-          onClick={() => {
-            setArchive(true);
-            setSelected(undefined);
-          }}
-        >
-          ▧ <span>Архив</span>
-        </button>
-        <div className="nav-label">ТИПЫ ЗАПИСЕЙ</div>
-        {Object.entries(types).map(([key, t]) => (
-          <button
-            key={key}
-            className={kind === key ? "nav active" : "nav"}
-            onClick={() => setKind(kind === key ? "" : key)}
-          >
-            {t.icon}
-            <span>{t.label}</span>
-          </button>
-        ))}
         <div className="sidebar-foot">
           <span className="shield">◇</span>
           <p>
-            Ваши секреты шифруются
+            {t("Ваши секреты шифруются")}
             <br />
-            на вашем устройстве.
+            {t("на вашем устройстве.")}
           </p>
-          <small>Только тестовые данные</small>
+          <small>{t("Только тестовые данные")}</small>
         </div>
       </aside>
       <main>
         <header>
           <div className="breadcrumb">
-            Личное пространство <span>/</span> {archive ? "Архив" : "Хранилище"}
+            {t("Личное пространство")}
+            <span>/</span> {archive ? t("Архив") : t("Хранилище")}
           </div>
           <div className="connection">
             <i className={status.online ? "online" : ""} />
             {status.unlocked
               ? status.online
-                ? "На связи"
-                : "Офлайн · только чтение"
-              : "Заблокировано"}
+                ? t("На связи")
+                : t("Офлайн · только чтение")
+              : t("Заблокировано")}
           </div>
           {status.unlocked && (
             <>
-              <button className="subtle" disabled={busy} onClick={sync}>
-                ↻ Синхронизировать
+              <button
+                className="subtle"
+                disabled={busy}
+                onClick={() =>
+                  requestLeave(() => {
+                    void sync();
+                  })
+                }
+              >
+                {t("↻ Синхронизировать")}
               </button>
               <button
                 className="subtle"
@@ -336,7 +706,7 @@ export default function App() {
                   clear();
                 }}
               >
-                Заблокировать
+                {t("Заблокировать")}
               </button>
             </>
           )}
@@ -344,66 +714,97 @@ export default function App() {
         <div className="content">
           {error && (
             <div className="banner error" role="alert">
-              {error}
+              {t(error)}
             </div>
           )}
           {notice && (
             <div className="banner notice" role="status">
-              {notice}
+              {t(notice)}
             </div>
           )}
-          {!status.unlocked ? (
+          {page === "settings" ? (
+            <Settings
+              login={status.unlocked ? status.login : undefined}
+              server={server}
+              online={status.online}
+              busy={busy}
+              timeout={timeout}
+              clipboard={clipboardSeconds}
+              onTimeout={(seconds) => {
+                void run(async () => {
+                  await call("settings", { seconds });
+                  setTimeoutSeconds(seconds);
+                });
+              }}
+              onClipboard={(seconds) => {
+                setClipboardSeconds(seconds);
+                writeLocal("neruvalo.clipboardSeconds", seconds);
+              }}
+              shortcuts={shortcuts}
+              onShortcuts={(value) => {
+                setShortcuts(value);
+                writeLocal("neruvalo.shortcuts", value);
+              }}
+            />
+          ) : !status.unlocked ? (
             <div className="auth-layout">
               <section className="intro">
-                <div className="eyebrow">СЕКРЕТЫ ПОД ВАШИМ КОНТРОЛЕМ</div>
+                <div className="eyebrow">
+                  {t("СЕКРЕТЫ ПОД ВАШИМ КОНТРОЛЕМ")}
+                </div>
                 <h1>
-                  Всё важное.
+                  {t("Всё важное.")}
                   <br />
-                  <em>Только ваше.</em>
+                  <em>{t("Только ваше.")}</em>
                 </h1>
                 <p>
-                  Пароли, карты, ключи и личные записи.
+                  {t("Пароли, карты, ключи и личные записи.")}
                   <br />
-                  Одно защищённое пространство на вашем сервере.
+                  {t("Одно защищённое пространство на вашем сервере.")}
                 </p>
                 <div className="intro-line" />
                 <div className="facts">
-                  <span>◎ Клиентское шифрование</span>
-                  <span>⌁ Открытый исходный код</span>
-                  <span>▤ Офлайн-просмотр</span>
+                  <span>{t("◎ Клиентское шифрование")}</span>
+                  <span>{t("⌁ Открытый исходный код")}</span>
+                  <span>{t("▤ Офлайн-просмотр")}</span>
                 </div>
               </section>
               <section className="auth-card">
                 <div className="card-symbol">◇</div>
                 <h2>
                   {mode === "verify"
-                    ? "Подтвердите email"
+                    ? t("Подтвердите email")
                     : mode === "register"
-                      ? "Создать аккаунт"
-                      : "Открыть хранилище"}
+                      ? t("Создать аккаунт")
+                      : t("Открыть хранилище")}
                 </h2>
                 <p className="muted">
                   {mode === "verify"
-                    ? "В прототипе письмо записано в закрытый dev-outbox сервера."
-                    : "Мастер-пароль остаётся на вашем устройстве."}
+                    ? t(
+                        "В прототипе письмо записано в закрытый dev-outbox сервера.",
+                      )
+                    : t("Пароль остаётся на вашем устройстве.")}
                 </p>
                 {mode === "verify" ? (
                   <>
                     <label>
-                      Код из письма
+                      {t("Код из письма")}
                       <input
                         value={code}
                         onChange={(e) => setCode(e.target.value)}
                         autoComplete="off"
                       />
                     </label>
-                    <p className="ticket">Файл письма: {ticket}.txt</p>
+                    <p className="ticket">
+                      {t("Файл письма:")}
+                      {ticket}.txt
+                    </p>
                     <button
                       className="primary full"
                       disabled={busy || !code}
                       onClick={finishRegistration}
                     >
-                      Подтвердить
+                      {t("Подтвердить")}
                     </button>
                   </>
                 ) : (
@@ -415,7 +816,7 @@ export default function App() {
                   >
                     {mode === "login" && (
                       <label>
-                        Сохранённые аккаунты
+                        {t("Сохранённые аккаунты")}
                         <select
                           value={offline}
                           onChange={(e) => {
@@ -429,10 +830,11 @@ export default function App() {
                             }
                           }}
                         >
-                          <option value="">Онлайн-вход</option>
-                          {profiles.map((p) => (
+                          <option value="">{t("Онлайн-вход")}</option>
+                          {accessibleProfiles.map((p) => (
                             <option value={p.id} key={p.id}>
-                              {p.login} · офлайн
+                              {p.login}
+                              {t("· офлайн")}
                             </option>
                           ))}
                         </select>
@@ -441,15 +843,48 @@ export default function App() {
                     {!offline && (
                       <>
                         <label>
-                          Ваш сервер
-                          <input
-                            value={server}
-                            onChange={(e) => setServer(e.target.value)}
-                            autoComplete="url"
-                          />
+                          {t("Сервер")}
+                          {launch.pinned_server ? (
+                            <input
+                              value={launch.pinned_server}
+                              readOnly
+                              dir="ltr"
+                            />
+                          ) : (
+                            <>
+                              <select
+                                value={otherServer ? "__new" : server}
+                                onChange={(e) => {
+                                  const custom = e.target.value === "__new";
+                                  setOtherServer(custom);
+                                  if (!custom) setServer(e.target.value);
+                                  else setServer("");
+                                }}
+                              >
+                                {launch.servers.map((value) => (
+                                  <option key={value} value={value}>
+                                    {value}
+                                  </option>
+                                ))}
+                                <option value="__new">
+                                  {t("Другой сервер…")}
+                                </option>
+                              </select>
+                              {otherServer && (
+                                <input
+                                  aria-label={t("Адрес сервера")}
+                                  value={server}
+                                  onChange={(e) => setServer(e.target.value)}
+                                  autoComplete="url"
+                                  placeholder="https://vault.example.org"
+                                  dir="ltr"
+                                />
+                              )}
+                            </>
+                          )}
                         </label>
                         <label>
-                          Логин
+                          {t("Логин")}
                           <input
                             value={login}
                             onChange={(e) => setLogin(e.target.value)}
@@ -470,7 +905,7 @@ export default function App() {
                       </label>
                     )}
                     <label>
-                      Мастер-пароль
+                      {t("Пароль")}
                       <input
                         type="password"
                         value={password}
@@ -490,18 +925,23 @@ export default function App() {
                           checked={recovery}
                           onChange={(e) => setRecovery(e.target.checked)}
                         />
-                        Восстановление мастер-сертификатом
+                        {t("Восстановление мастер-сертификатом")}
                       </label>
                     )}
                     <button
                       className="primary full"
-                      disabled={busy || certReady}
+                      disabled={
+                        busy ||
+                        certReady ||
+                        !configured ||
+                        !!launch.startup_error
+                      }
                     >
                       {busy
-                        ? "Пожалуйста, подождите…"
+                        ? t("Пожалуйста, подождите…")
                         : mode === "register"
-                          ? "Создать аккаунт"
-                          : "Открыть хранилище →"}
+                          ? t("Создать аккаунт")
+                          : t("Открыть хранилище →")}
                     </button>
                   </form>
                 )}
@@ -519,12 +959,14 @@ export default function App() {
                       })
                     }
                   >
-                    Сохранить мастер-сертификат
+                    {t("Сохранить мастер-сертификат")}
                   </button>
                 )}
                 <div className="auth-links">
                   <button
-                    disabled={busy || certReady}
+                    disabled={
+                      busy || certReady || !configured || !!launch.startup_error
+                    }
                     onClick={() => {
                       setMode(mode === "register" ? "login" : "register");
                       setOffline("");
@@ -533,11 +975,13 @@ export default function App() {
                   >
                     {" "}
                     {mode === "register"
-                      ? "У меня есть аккаунт"
-                      : "Создать аккаунт"}
+                      ? t("У меня есть аккаунт")
+                      : t("Создать аккаунт")}
                   </button>
                   <button
-                    disabled={busy || certReady}
+                    disabled={
+                      busy || certReady || !configured || !!launch.startup_error
+                    }
                     onClick={() =>
                       run(async () => {
                         if (!password)
@@ -552,11 +996,11 @@ export default function App() {
                       })
                     }
                   >
-                    Восстановить доступ
+                    {t("Восстановить доступ")}
                   </button>
                 </div>
                 <div className="local-warning">
-                  Прототип. Не сохраняйте настоящие секреты.
+                  {t("Прототип. Не сохраняйте настоящие секреты.")}
                 </div>
               </section>
             </div>
@@ -564,16 +1008,19 @@ export default function App() {
             <>
               <section className="page-title">
                 <div>
-                  <div className="eyebrow">{status.login} / ЛИЧНОЕ</div>
-                  <h1>{archive ? "Архив" : "Ваше хранилище"}</h1>
-                  <p className="muted">Тихое место для важных вещей.</p>
+                  <div className="eyebrow">
+                    {status.login}
+                    {t("/ ЛИЧНОЕ")}
+                  </div>
+                  <h1>{archive ? t("Архив") : t("Ваше хранилище")}</h1>
+                  <p className="muted">{t("Тихое место для важных вещей.")}</p>
                 </div>
                 <button
                   className="primary"
                   disabled={busy || !status.online}
                   onClick={requestNew}
                 >
-                  ＋ Добавить запись
+                  {t("＋ Добавить запись")}
                 </button>
               </section>
               <div className="vault-grid">
@@ -581,14 +1028,17 @@ export default function App() {
                   <div className="search">
                     <span>⌕</span>
                     <input
-                      placeholder="Поиск по названию, папке или тегу"
+                      placeholder={t("Поиск по названию, папке или тегу")}
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                     />
                   </div>
                   <div className="list-caption">
-                    {kind ? types[kind].label : "Все типы"}
-                    <span>{visible.length} записей</span>
+                    {t(kind ? types[kind].label : t("Все типы"))}
+                    <span>
+                      {new Intl.NumberFormat(language).format(visible.length)}{" "}
+                      {t("Записи")}
+                    </span>
                   </div>
                   {visible.length ? (
                     visible.map((e) => (
@@ -599,16 +1049,21 @@ export default function App() {
                             ? "record selected"
                             : "record"
                         }
-                        onClick={() => open(e)}
+                        data-record-id={e.record_id}
+                        onClick={() => requestLeave(() => open(e))}
                       >
                         <span className="record-icon">
-                          {types[e.data.record_type]?.icon ?? "?"}
+                          <Icon name={e.data.record_type} />
                         </span>
                         <span>
-                          <strong>{e.data.title}</strong>
+                          <strong>
+                            <bdi>{e.data.title}</bdi>
+                          </strong>
                           <small>
-                            {types[e.data.record_type]?.label ??
-                              "Неизвестный тип"}
+                            {t(
+                              types[e.data.record_type]?.label ??
+                                t("Неизвестный тип"),
+                            )}
                             {e.data.folder ? " · " + e.data.folder : ""}
                           </small>
                         </span>
@@ -618,11 +1073,13 @@ export default function App() {
                   ) : (
                     <div className="empty">
                       <span>◇</span>
-                      <h3>Здесь пока тихо</h3>
+                      <h3>{t("Здесь пока тихо")}</h3>
                       <p>
                         {archive
-                          ? "Архивированные записи появятся здесь."
-                          : "Добавьте первую запись — она будет зашифрована до отправки."}
+                          ? t("Архивированные записи появятся здесь.")
+                          : t(
+                              "Добавьте первую запись — она будет зашифрована до отправки.",
+                            )}
                       </p>
                     </div>
                   )}
@@ -631,30 +1088,51 @@ export default function App() {
                   {draft ? (
                     <>
                       <div className="detail-heading">
-                        <h2>{selected ? "Редактирование" : "Новая запись"}</h2>
+                        <h2>
+                          {selected ? t("Редактирование") : t("Новая запись")}
+                        </h2>
                         <button
                           className="subtle"
-                          onClick={() => setDraft(undefined)}
+                          onClick={() =>
+                            requestLeave(() => setDraft(undefined))
+                          }
                         >
-                          Отмена
+                          {t("Отмена")}
                         </button>
                       </div>
+                      <div
+                        className="type-picker"
+                        role="group"
+                        aria-label={t("Тип")}
+                      >
+                        {Object.entries(types).map(([key, type]) => (
+                          <button
+                            key={key}
+                            className={
+                              draft.record_type === key
+                                ? "type-choice active"
+                                : "type-choice"
+                            }
+                            aria-pressed={draft.record_type === key}
+                            disabled={!!selected}
+                            onClick={() => {
+                              if (draft.record_type !== key)
+                                requestLeave(() => {
+                                  setDraft({
+                                    ...empty(key),
+                                    folder: draft.folder,
+                                  });
+                                  setCustomName("");
+                                });
+                            }}
+                          >
+                            <Icon name={key} />
+                            <span>{t(type.label)}</span>
+                          </button>
+                        ))}
+                      </div>
                       <label>
-                        Тип
-                        <select
-                          disabled={!!selected}
-                          value={draft.record_type}
-                          onChange={(e) => setDraft(empty(e.target.value))}
-                        >
-                          {Object.entries(types).map(([key, t]) => (
-                            <option key={key} value={key}>
-                              {t.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        Название
+                        {t("Название")}
                         <input
                           value={draft.title}
                           onChange={(e) =>
@@ -662,10 +1140,60 @@ export default function App() {
                           }
                         />
                       </label>
-                      {currentType.fields.map(
-                        ([key, title, secret, multiline]) => (
+                      {draft.record_type === "document" && (
+                        <>
+                          <label>
+                            {t("Шаблон документа")}
+                            <select
+                              value={draft.fields.template ?? "custom"}
+                              onChange={(e) =>
+                                setDraft({
+                                  ...draft,
+                                  fields: {
+                                    ...draft.fields,
+                                    template: e.target.value,
+                                    kind: t(templateLabels[e.target.value]),
+                                  },
+                                })
+                              }
+                            >
+                              {documentTemplates.map((key) => (
+                                <option key={key} value={key}>
+                                  {t(templateLabels[key])}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="check">
+                            <input
+                              type="checkbox"
+                              checked={draft.fields.never_expires === "true"}
+                              onChange={(e) =>
+                                setDraft({
+                                  ...draft,
+                                  fields: {
+                                    ...draft.fields,
+                                    never_expires: String(e.target.checked),
+                                  },
+                                })
+                              }
+                            />
+                            {t("Бессрочный документ")}
+                          </label>
+                        </>
+                      )}
+                      {fieldsOf(draft)
+                        .filter(
+                          ([key]) =>
+                            !(
+                              draft.record_type === "document" &&
+                              key === "expires" &&
+                              draft.fields.never_expires === "true"
+                            ),
+                        )
+                        .map(([key, title, secret, multiline]) => (
                           <label key={key}>
-                            {title}
+                            {key.startsWith("custom:") ? title : t(title)}
                             {multiline ? (
                               <textarea
                                 rows={4}
@@ -700,10 +1228,39 @@ export default function App() {
                               />
                             )}
                           </label>
-                        ),
+                        ))}
+                      {draft.record_type === "document" && (
+                        <div className="two">
+                          <label>
+                            {t("Дополнительное поле")}
+                            <input
+                              value={customName}
+                              onChange={(e) => setCustomName(e.target.value)}
+                            />
+                          </label>
+                          <button
+                            className="subtle"
+                            disabled={
+                              !customName.trim() ||
+                              "custom:" + customName.trim() in draft.fields
+                            }
+                            onClick={() => {
+                              setDraft({
+                                ...draft,
+                                fields: {
+                                  ...draft.fields,
+                                  ["custom:" + customName.trim()]: "",
+                                },
+                              });
+                              setCustomName("");
+                            }}
+                          >
+                            {t("Добавить поле")}
+                          </button>
+                        </div>
                       )}
                       <label>
-                        Заметки
+                        {t("Заметки")}
                         <textarea
                           rows={4}
                           value={draft.notes}
@@ -714,16 +1271,43 @@ export default function App() {
                       </label>
                       <div className="two">
                         <label>
-                          Папка
-                          <input
-                            value={draft.folder}
-                            onChange={(e) =>
-                              setDraft({ ...draft, folder: e.target.value })
-                            }
-                          />
+                          {t("Папка")}
+                          <select
+                            value={newFolder ? "__new" : draft.folder}
+                            onChange={(e) => {
+                              const fresh = e.target.value === "__new";
+                              setNewFolder(fresh);
+                              if (!fresh)
+                                setDraft({ ...draft, folder: e.target.value });
+                            }}
+                          >
+                            <option value="">{t("Без папки")}</option>
+                            {[
+                              ...new Set([
+                                ...folders,
+                                ...(draft.folder ? [draft.folder] : []),
+                              ]),
+                            ].map((value) => (
+                              <option key={value} value={value}>
+                                {value}
+                              </option>
+                            ))}
+                            <option value="__new">{t("Новая папка…")}</option>
+                          </select>
+                          {newFolder && (
+                            <input
+                              aria-label={t("Путь папки")}
+                              placeholder={t("Папка / Подпапка")}
+                              value={draft.folder}
+                              onChange={(e) =>
+                                setDraft({ ...draft, folder: e.target.value })
+                              }
+                            />
+                          )}
+                          <small>{t("Подпапки разделяются знаком /")}</small>
                         </label>
                         <label>
-                          Теги через запятую
+                          {t("Теги через запятую")}
                           <input
                             value={draft.tags.join(", ")}
                             onChange={(e) =>
@@ -748,7 +1332,7 @@ export default function App() {
                         }
                         onClick={save}
                       >
-                        Зашифровать и сохранить
+                        {t("Зашифровать и сохранить")}
                       </button>
                     </>
                   ) : selected ? (
@@ -756,66 +1340,90 @@ export default function App() {
                       <div className="detail-heading">
                         <div>
                           <span className="eyebrow">
-                            ВЕРСИЯ {selected.revision}
+                            {t("ВЕРСИЯ")} {selected.revision}
                           </span>
-                          <h2>{selected.data.title}</h2>
+                          <h2>
+                            <bdi>{selected.data.title}</bdi>
+                          </h2>
                         </div>
-                        <span className="large-icon">{currentType.icon}</span>
+                        <span className="large-icon">
+                          <Icon
+                            name={selected.data.record_type}
+                            label={t(currentType?.label ?? "Неизвестный тип")}
+                          />
+                        </span>
                       </div>
-                      {currentType.fields.map(([key, title, secret]) => {
-                        const value = selected.data.fields[key];
-                        return value ? (
-                          <div className="field" key={key}>
-                            <small>{title}</small>
-                            <div>
-                              <code>
-                                {secret && !revealed[key]
-                                  ? "••••••••••••"
-                                  : value}
-                              </code>
-                              <span>
-                                {secret && (
+                      {fieldsOf(selected.data)
+                        .filter(
+                          ([key]) =>
+                            !(
+                              selected.data.record_type === "document" &&
+                              key === "expires" &&
+                              selected.data.fields.never_expires === "true"
+                            ),
+                        )
+                        .map(([key, title, secret]) => {
+                          const value = selected.data.fields[key];
+                          return value ? (
+                            <div className="field" key={key} data-field={key}>
+                              <small>
+                                {key.startsWith("custom:") ? title : t(title)}
+                              </small>
+                              <div>
+                                <code>
+                                  {secret && !revealed[key]
+                                    ? "••••••••••••"
+                                    : value}
+                                </code>
+                                <span>
+                                  {secret && (
+                                    <button
+                                      className="subtle"
+                                      onClick={() =>
+                                        setRevealed({
+                                          ...revealed,
+                                          [key]: !revealed[key],
+                                        })
+                                      }
+                                    >
+                                      {revealed[key]
+                                        ? t("Скрыть")
+                                        : t("Показать")}
+                                    </button>
+                                  )}
                                   <button
                                     className="subtle"
-                                    onClick={() =>
-                                      setRevealed({
-                                        ...revealed,
-                                        [key]: !revealed[key],
-                                      })
-                                    }
+                                    onClick={() => {
+                                      void copy(selected, key);
+                                    }}
                                   >
-                                    {revealed[key] ? "Скрыть" : "Показать"}
+                                    {t("Копировать")}
                                   </button>
-                                )}
-                                <button
-                                  className="subtle"
-                                  onClick={() =>
-                                    run(async () => {
-                                      await call("copy_field", {
-                                        id: selected.record_id,
-                                        field: key,
-                                        seconds: clipboardSeconds,
-                                      });
-                                      setNotice("Скопировано.");
-                                    })
-                                  }
-                                >
-                                  Копировать
-                                </button>
-                              </span>
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ) : null;
-                      })}
+                          ) : null;
+                        })}
+                      {selected.data.record_type === "document" &&
+                        selected.data.fields.never_expires === "true" && (
+                          <p>{t("Бессрочный документ")}</p>
+                        )}
+                      {selected.data.folder && (
+                        <p className="muted">
+                          <bdi>{selected.data.folder}</bdi>
+                        </p>
+                      )}
                       {selected.data.notes && (
                         <div className="field">
-                          <small>Заметки</small>
+                          <small>{t("Заметки")}</small>
                           <p className="pre">{selected.data.notes}</p>
                         </div>
                       )}
                       <div className="tags">
                         {selected.data.tags.map((t) => (
-                          <span key={t}>{t}</span>
+                          <span key={t}>
+                            <bdi>{t}</bdi>
+                          </span>
                         ))}
                       </div>
                       <div className="actions">
@@ -824,37 +1432,32 @@ export default function App() {
                           disabled={
                             busy || !status.online || needsSync || archive
                           }
-                          onClick={() =>
+                          onClick={() => (
+                            setNewFolder(false),
                             setDraft(structuredClone(selected.data))
-                          }
+                          )}
                         >
-                          Редактировать
+                          {t("Редактировать")}
                         </button>
                         <button
                           className="subtle"
-                          onClick={() =>
-                            run(async () =>
-                              setHistory(
-                                await call("history", {
-                                  id: selected.record_id,
-                                }),
-                              ),
-                            )
-                          }
+                          onClick={() => {
+                            void loadHistory(selected);
+                          }}
                         >
-                          История
+                          {t("История")}
                         </button>
                         <button
                           className="subtle"
                           disabled={busy || !status.online || needsSync}
                           onClick={() => setArchived(!archive)}
                         >
-                          {archive ? "Вернуть из архива" : "В архив"}
+                          {archive ? t("Вернуть из архива") : t("В архив")}
                         </button>
                       </div>
                       {history.length > 0 && (
                         <div className="history">
-                          <h3>История владельца</h3>
+                          <h3>{t("История владельца")}</h3>
                           {history.map((v) => (
                             <HistoryVersion
                               key={v.version_id}
@@ -881,55 +1484,16 @@ export default function App() {
                   ) : (
                     <div className="empty detail-empty">
                       <span>⌁</span>
-                      <h3>Каждая деталь под защитой</h3>
+                      <h3>{t("Каждая деталь под защитой")}</h3>
                       <p>
-                        Выберите запись слева,
+                        {t("Выберите запись слева,")}
                         <br />
-                        чтобы посмотреть её содержимое.
+                        {t("чтобы посмотреть её содержимое.")}
                       </p>
                     </div>
                   )}
                 </section>
               </div>
-              <footer className="settings">
-                <label>
-                  Блокировка
-                  <select
-                    value={timeout}
-                    disabled={!status.online || busy}
-                    onChange={(e) =>
-                      run(async () => {
-                        const seconds = Number(e.target.value);
-                        await call("settings", { seconds });
-                        setTimeoutSeconds(seconds);
-                      })
-                    }
-                  >
-                    <option value={60}>Через 1 минуту</option>
-                    <option value={300}>Через 5 минут</option>
-                    <option value={900}>Через 15 минут</option>
-                    <option value={0}>Никогда</option>
-                  </select>
-                </label>
-                <label>
-                  Очистка буфера
-                  <select
-                    value={clipboardSeconds}
-                    onChange={(e) =>
-                      setClipboardSeconds(Number(e.target.value))
-                    }
-                  >
-                    <option value={30}>Через 30 секунд</option>
-                    <option value={60}>Через 1 минуту</option>
-                    <option value={120}>Через 2 минуты</option>
-                    <option value={0}>Не очищать</option>
-                  </select>
-                </label>
-                <span>
-                  История сохраняется. Получатель общего доступа пока не
-                  реализован.
-                </span>
-              </footer>
             </>
           )}
         </div>

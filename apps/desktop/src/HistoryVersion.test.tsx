@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { HistoryVersion } from "./HistoryVersion";
 import { empty } from "./model";
+import { setPreference } from "./i18n";
 
 describe("historical record display", () => {
   it("shows version contents while masking card secrets", () => {
+    setPreference("ru");
     const html = renderToStaticMarkup(
       <HistoryVersion
         entry={{

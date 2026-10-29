@@ -1,12 +1,16 @@
 import { useEffect, useRef } from "react";
+import { useI18n } from "./i18n";
 
 export function ConfirmNewEntry({
   onCancel,
   onConfirm,
+  general = false,
 }: {
+  general?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current!;
@@ -29,9 +33,11 @@ export function ConfirmNewEntry({
         onCancel();
       }}
     >
-      <h2 id="discard-title">Начать новую запись?</h2>
+      <h2 id="discard-title">
+        {t(general ? "Отменить изменения?" : "Начать новую запись?")}
+      </h2>
       <p id="discard-description">
-        Несохранённые изменения в текущей записи будут потеряны.
+        {t("Несохранённые изменения в текущей записи будут потеряны.")}
       </p>
       <div className="discard-actions">
         <button
@@ -40,10 +46,10 @@ export function ConfirmNewEntry({
           autoFocus
           onClick={onCancel}
         >
-          Продолжить редактирование
+          {t("Продолжить редактирование")}
         </button>
         <button type="button" className="primary" onClick={onConfirm}>
-          Начать новую запись
+          {t(general ? "Продолжить" : "Начать новую запись")}
         </button>
       </div>
     </dialog>
