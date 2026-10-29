@@ -192,5 +192,19 @@
   "Слишком много запросов. Повторите позже.": "Zu viele Anfragen. Versuchen Sie es später erneut.",
   "Сервер или ключи аккаунта изменились. Вход остановлен.": "Serveridentität oder Kontoschlüssel geändert. Anmeldung gestoppt.",
   "Версия сервера или данных не поддерживается.": "Server- oder Datenversion wird nicht unterstützt.",
-  "Операция не выполнена. Проверьте соединение и повторите.": "Vorgang fehlgeschlagen. Verbindung prüfen und erneut versuchen."
+  "Операция не выполнена. Проверьте соединение и повторите.": "Vorgang fehlgeschlagen. Verbindung prüfen und erneut versuchen.",
+  "Группа": "Gruppe",
+  "Новая группа": "Neue Gruppe",
+  "Название группы": "Gruppenname",
+  "Родительская группа": "Übergeordnete Gruppe",
+  "Корень списка": "Oberste Ebene",
+  "Создать группу": "Gruppe erstellen",
+  "Создать подгруппу": "Untergruppe erstellen",
+  "Добавить запись": "Eintrag hinzufügen",
+  "Свернуть группу": "Gruppe einklappen",
+  "Развернуть группу": "Gruppe aufklappen",
+  "Поиск по названию, группе или тегу": "Titel, Gruppe oder Tag suchen",
+  "Группа недоступна. Синхронизируйте устройства.": "Gruppe nicht verfügbar. Synchronisieren Sie Ihre Geräte.",
+  "Недопустимая структура групп.": "Ungültige Gruppenstruktur.",
+  "Для группы требуется отдельное действие.": "Verwenden Sie eine Gruppenaktion."
 }

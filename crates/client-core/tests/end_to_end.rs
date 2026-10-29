@@ -296,3 +296,134 @@ async fn server_idempotency_authorization_and_tampered_requests() {
     );
     handle.abort();
 }
+
+#[tokio::test]
+async fn encrypted_groups_legacy_paths_and_offline_tree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (server, handle) = start(root).await;
+    let mut a = Client::new(root.join("groups-a")).unwrap();
+    register(&mut a, &server, "groupsalice", root).await;
+    a.login(&server, "groupsalice", password()).await.unwrap();
+    assert_eq!(a.status()["server"], server);
+    let mut old = data("Old entry", "00123");
+    old.folder = "Private Bank/Cards".into();
+    let old_id = a.save(None, 0, old.clone(), false).await.unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut b = Client::new(root.join("groups-b")).unwrap();
+    b.login(&server, "groupsalice", password()).await.unwrap();
+    let top = a
+        .create_group("Private empty group".into(), None)
+        .await
+        .unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child = a.create_group("Child".into(), Some(&top)).await.unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(a.groups().await.unwrap().len(), 2);
+    assert_eq!(a.list().await.unwrap().len(), 1); // metadata objects never appear as secret entries
+    assert_eq!(
+        a.groups()
+            .await
+            .unwrap()
+            .iter()
+            .find(|g| g.id == child)
+            .unwrap()
+            .parent_id
+            .as_deref(),
+        Some(top.as_str())
+    );
+    let moved = a
+        .save_in_group(
+            Some(old_id.clone()),
+            1,
+            old.clone(),
+            false,
+            Some("legacy:Private Bank/Cards"),
+        )
+        .await
+        .unwrap();
+    let legacy_id = moved["group_id"].as_str().unwrap().to_owned();
+    let history = a.history(&old_id).await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert!(!history[1].data.extra.contains_key("group_id"));
+    assert_eq!(history[1].data.folder, "Private Bank/Cards");
+    assert_eq!(history[0].data.folder, history[1].data.folder);
+    assert_eq!(history[0].data.fields, history[1].data.fields);
+    // b's snapshot predates materialization: deterministic private IDs resolve
+    // the server conflict and reuse both ancestors instead of duplicating them.
+    b.save_in_group(
+        None,
+        0,
+        data("Another", "different"),
+        false,
+        Some("legacy:Private Bank/Cards"),
+    )
+    .await
+    .unwrap();
+    let paths = b.groups().await.unwrap();
+    assert_eq!(paths.iter().filter(|g| g.legacy_path.is_some()).count(), 2);
+    assert!(paths.iter().any(|g| g.id == legacy_id));
+    assert!(a
+        .save(
+            Some(top.clone()),
+            1,
+            data("Cannot convert group", ""),
+            false
+        )
+        .await
+        .is_err());
+    assert!(a
+        .create_group("Invalid".into(), Some("not-an-id"))
+        .await
+        .is_err());
+    let groups_before = a.groups().await.unwrap().len();
+    assert!(a
+        .create_group(" ".into(), Some("legacy:Should/Not/Exist"))
+        .await
+        .is_err());
+    assert_eq!(a.groups().await.unwrap().len(), groups_before);
+    a.sync().await.unwrap();
+    let profile = a.profiles().await.unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    a.lock();
+    let mut reopened = Client::new(root.join("groups-a")).unwrap();
+    reopened.unlock_offline(&profile, password()).await.unwrap();
+    assert_eq!(reopened.groups().await.unwrap().len(), 4);
+    assert_eq!(reopened.list().await.unwrap().len(), 2);
+    assert_eq!(
+        reopened
+            .create_group("Offline".into(), None)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "OFFLINE_READ_ONLY"
+    );
+    assert!(reopened
+        .save_in_group(Some(old_id.clone()), 2, old, false, Some(&child))
+        .await
+        .is_err());
+    reopened.lock();
+    assert!(reopened.groups().await.is_err());
+    let pool = sqlx::AnyPool::connect(&std::env::var("NERUVALO_TEST_DATABASE_URL").unwrap_or_else(
+        |_| neruvalo_client::sqlite_database_url(&root.join("server.sqlite3")).unwrap(),
+    ))
+    .await
+    .unwrap();
+    let raw: Vec<(String,)> = sqlx::query_as("SELECT body FROM versions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    let bodies = raw.into_iter().map(|r| r.0).collect::<String>();
+    assert!(!bodies.contains("Private empty group"));
+    assert!(!bodies.contains("Private Bank"));
+    pool.close().await;
+    handle.abort();
+}

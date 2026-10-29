@@ -192,5 +192,19 @@
   "Слишком много запросов. Повторите позже.": "Too many requests. Try again later.",
   "Сервер или ключи аккаунта изменились. Вход остановлен.": "Server identity or account keys changed. Sign-in stopped.",
   "Версия сервера или данных не поддерживается.": "Server or data version is not supported.",
-  "Операция не выполнена. Проверьте соединение и повторите.": "Operation failed. Check your connection and try again."
+  "Операция не выполнена. Проверьте соединение и повторите.": "Operation failed. Check your connection and try again.",
+  "Группа": "Group",
+  "Новая группа": "New group",
+  "Название группы": "Group name",
+  "Родительская группа": "Parent group",
+  "Корень списка": "Top level",
+  "Создать группу": "Create group",
+  "Создать подгруппу": "Create subgroup",
+  "Добавить запись": "Add entry",
+  "Свернуть группу": "Collapse group",
+  "Развернуть группу": "Expand group",
+  "Поиск по названию, группе или тегу": "Search title, group or tag",
+  "Группа недоступна. Синхронизируйте устройства.": "Group unavailable. Synchronize your devices.",
+  "Недопустимая структура групп.": "Invalid group structure.",
+  "Для группы требуется отдельное действие.": "Use a group-specific action."
 }

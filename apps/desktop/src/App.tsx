@@ -7,7 +7,9 @@ import { useI18n, setSystemLocale } from "./i18n";
 import { Icon } from "./Icon";
 import { Settings } from "./Settings";
 import { ContextMenu, MenuItem } from "./ContextMenu";
-import { foldersOf, inFolder } from "./folders";
+import { Group, groupsFor, parentOf, groupLabel, entryTree } from "./groups";
+import { EntryTree } from "./EntryTree";
+import { GroupEditor, GroupDraft } from "./GroupEditor";
 import { fieldsOf, documentTemplates, templateLabels } from "./documents";
 import {
   Shortcuts,
@@ -19,19 +21,13 @@ import {
   shortcutText,
   isMobile,
 } from "./preferences";
-import {
-  Data,
-  Entry,
-  Profile,
-  types,
-  empty,
-  filterEntries,
-  errorText,
-} from "./model";
+import { Data, Entry, Profile, types, empty, errorText } from "./model";
 type Status = {
   unlocked: boolean;
   online?: boolean;
   login?: string;
+  server?: string;
+  profile?: string;
   timeout_seconds?: number;
 };
 async function call<T = any>(
@@ -43,8 +39,11 @@ async function call<T = any>(
 export default function App() {
   const { t, language } = useI18n();
   const [page, setPage] = useState<"vault" | "settings">("vault");
-  const [folder, setFolder] = useState<string | null>(null);
-  const [newFolder, setNewFolder] = useState(false);
+  const [treeReveal, setTreeReveal] = useState(0);
+  const [savedGroups, setSavedGroups] = useState<Group[]>([]);
+  const [activeGroup, setActiveGroup] = useState<string | null>(null);
+  const [draftGroup, setDraftGroup] = useState<string | null>(null);
+  const [groupDraft, setGroupDraft] = useState<GroupDraft | null>(null);
   const [customName, setCustomName] = useState("");
   const [launch, setLaunch] = useState<{
     pinned_server?: string;
@@ -109,9 +108,11 @@ export default function App() {
     setPendingAction(null);
     setMenu(null);
     setPage("vault");
-    setFolder(null);
+    setActiveGroup(null);
+    setDraftGroup(null);
+    setGroupDraft(null);
+    setSavedGroups([]);
     setCustomName("");
-    setNewFolder(false);
     setQuery("");
     setKind("");
     setOffline("");
@@ -143,16 +144,21 @@ export default function App() {
   async function refresh() {
     const epoch = generation.current;
     const s = await call<Status>("status");
+    if (epoch !== generation.current) return;
     if (!s.unlocked) {
       clear();
       return;
     }
-    const list = await call<Entry[]>("list");
+    const [list, groups] = await Promise.all([
+      call<Entry[]>("list"),
+      call<Group[]>("groups"),
+    ]);
     if (epoch !== generation.current) return;
     wasUnlocked.current = true;
     setStatus(s);
     setTimeoutSeconds(s.timeout_seconds ?? 60);
     setEntries(list);
+    setSavedGroups(groups ?? []);
   }
   useEffect(() => {
     call("launch_config")
@@ -173,8 +179,10 @@ export default function App() {
       .then(setProfiles)
       .catch((e) => setError(errorText(e)));
     const timer = setInterval(() => {
+      const epoch = generation.current;
       call<Status>("status")
         .then((s) => {
+          if (epoch !== generation.current) return;
           if (!s.unlocked) {
             if (wasUnlocked.current) clear();
           } else setStatus(s);
@@ -206,7 +214,7 @@ export default function App() {
   }, [status.unlocked]);
   function requestLeave(action: () => void) {
     setMenu(null);
-    if (draft) {
+    if (draft || groupDraft) {
       setPendingAction({ epoch: generation.current, action });
       return;
     }
@@ -235,6 +243,7 @@ export default function App() {
         !document.hasFocus() ||
         !status.unlocked ||
         draft ||
+        groupDraft ||
         busy ||
         menu ||
         pendingNew ||
@@ -264,6 +273,7 @@ export default function App() {
   }, [
     status.unlocked,
     draft,
+    groupDraft,
     busy,
     menu,
     page,
@@ -331,7 +341,30 @@ export default function App() {
         },
       ];
     } else if (status.unlocked) {
-      const row = target.closest<HTMLElement>("[data-record-id]");
+      const groupRow = target.closest<HTMLElement>("[data-group-id]");
+      const recordRow = target.closest<HTMLElement>("[data-record-id]");
+      if (groupRow && !recordRow) {
+        const group = groups.find((g) => g.id === groupRow.dataset.groupId);
+        if (group) {
+          items = [
+            {
+              label: t("Добавить запись"),
+              disabled: busy || !status.online || needsSync,
+              action: safe(() =>
+                requestLeave(() => beginNew(kind || "login", group.id)),
+              ),
+            },
+            {
+              label: t("Создать подгруппу"),
+              disabled: busy || !status.online || needsSync,
+              action: safe(() => requestLeave(() => beginGroup(group.id))),
+            },
+          ];
+        }
+        if (items.length) setMenu({ x, y, items });
+        return;
+      }
+      const row = recordRow;
       const entry = row
         ? entries.find((e) => e.record_id === row.dataset.recordId)
         : target.closest(".detail-panel") && !draft
@@ -404,24 +437,62 @@ export default function App() {
       if (epoch === generation.current) setHistory(values);
     });
   }
+  function selectGroup(group: Group) {
+    requestLeave(() => {
+      setSelected(undefined);
+      setDraft(undefined);
+      setGroupDraft(null);
+      setHistory([]);
+      setRevealed({});
+      setActiveGroup(group.id);
+    });
+  }
+  function beginGroup(parent: string | null = activeGroup) {
+    setSelected(undefined);
+    setDraft(undefined);
+    setHistory([]);
+    setRevealed({});
+    setGroupDraft({ title: "", parent });
+  }
+  async function saveGroup() {
+    if (!groupDraft) return;
+    const epoch = generation.current;
+    await run(async () => {
+      const result = await call("create_group", {
+        title: groupDraft.title.trim(),
+        parent: groupDraft.parent,
+      });
+      if (epoch !== generation.current) return;
+      setGroupDraft(null);
+      setActiveGroup(result.record_id);
+      setQuery("");
+      await refresh();
+      setTreeReveal((n) => n + 1);
+    });
+  }
   function open(entry: Entry) {
-    setNewFolder(false);
+    setGroupDraft(null);
+    const parent = parentOf(entry.data, groups);
+    setActiveGroup(parent);
+    setDraftGroup(parent);
     setCustomName("");
     setSelected(entry);
     setDraft(undefined);
     setHistory([]);
     setRevealed({});
   }
-  function beginNew(recordType: string) {
+  function beginNew(recordType: string, parent: string | null = activeGroup) {
+    setGroupDraft(null);
+    setDraftGroup(parent);
+    setActiveGroup(parent);
     setSelected(undefined);
     setHistory([]);
     setRevealed({});
-    setNewFolder(false);
     setCustomName("");
-    setDraft({ ...empty(recordType), folder: folder ?? "" });
+    setDraft(empty(recordType));
   }
   function requestNew() {
-    if (draft) {
+    if (draft || groupDraft) {
       setPendingNew({ kind: kind || "login", epoch: generation.current });
       return;
     }
@@ -489,6 +560,7 @@ export default function App() {
       setDraft(undefined);
       setSelected(undefined);
       setHistory([]);
+      setGroupDraft(null);
       await refresh();
       setNotice("Все изменения загружены.");
     });
@@ -496,24 +568,21 @@ export default function App() {
   async function save() {
     if (!draft) return;
     await run(async () => {
-      await call("save", {
+      const result = await call("save", {
         id: selected?.record_id ?? null,
         expected_revision: selected?.revision ?? 0,
-        data: newFolder
-          ? {
-              ...draft,
-              folder: draft.folder
-                .split("/")
-                .map((s) => s.trim())
-                .filter(Boolean)
-                .join("/"),
-            }
-          : draft,
+        data: draft,
+        group: draftGroup,
         archived: selected?.archived ?? false,
       });
+      setActiveGroup(result?.group_id ?? draftGroup);
+      if (!selected) setArchive(false);
+      if (kind && kind !== draft.record_type) setKind("");
+      setQuery("");
       setDraft(undefined);
       setSelected(undefined);
       await refresh();
+      setTreeReveal((n) => n + 1);
     });
   }
   async function setArchived(
@@ -533,10 +602,25 @@ export default function App() {
       await refresh();
     });
   }
-  const folders = foldersOf(entries);
-  const visible = filterEntries(entries, query, kind, archive).filter((e) =>
-    inFolder(e.data.folder, folder),
-  );
+  const groups = groupsFor(entries, savedGroups);
+  const tree = entryTree(groups, entries, query, kind, archive);
+  const visibleCount = (nodes: typeof tree): number =>
+    nodes.reduce(
+      (count, node) =>
+        count + (node.entry ? 1 : 0) + visibleCount(node.children),
+      0,
+    );
+  const selectedGroup =
+    groups.find((g) => g.id === activeGroup) ??
+    groups.find(
+      (g) =>
+        activeGroup?.startsWith("legacy:") &&
+        g.legacy_path === activeGroup.slice(7),
+    );
+  const activeServer =
+    status.server ??
+    profiles.find((p) => p.id === status.profile)?.server ??
+    "";
   const currentType = types[(draft ?? selected?.data)?.record_type ?? "login"];
   return (
     <div
@@ -574,17 +658,17 @@ export default function App() {
             Neruvalo<small>YOUR PRIVATE SPACE</small>
           </div>
         </div>
-        <div className="stage">PROTOTYPE · 0.1</div>
+        <div className="stage">PROTOTYPE · 0.2</div>
         {status.unlocked && (
           <>
-            <div className="nav-label">{t("ХРАНИЛИЩЕ")}</div>
             <button
               className={!archive ? "nav active" : "nav"}
               onClick={() => {
                 requestLeave(() => {
                   setPage("vault");
                   setArchive(false);
-                  setFolder(null);
+                  setActiveGroup(null);
+                  setGroupDraft(null);
                   setKind("");
                   setSelected(undefined);
                   setDraft(undefined);
@@ -600,6 +684,7 @@ export default function App() {
                 requestLeave(() => {
                   setPage("vault");
                   setArchive(true);
+                  setGroupDraft(null);
                   setSelected(undefined);
                   setDraft(undefined);
                 });
@@ -607,32 +692,7 @@ export default function App() {
             >
               <Icon name="archive" /> <span>{t("Архив")}</span>
             </button>
-            <div className="nav-label">{t("Папки")}</div>
-            <button
-              className={folder === "" ? "nav active" : "nav"}
-              onClick={() => {
-                setPage("vault");
-                setFolder("");
-              }}
-            >
-              <Icon name="folder" />
-              <span>{t("Без папки")}</span>
-            </button>
-            {folders.map((path) => (
-              <button
-                key={path}
-                title={path}
-                className={folder === path ? "nav active" : "nav"}
-                onClick={() => {
-                  setPage("vault");
-                  setFolder(path);
-                }}
-              >
-                <Icon name="folder" />
-                <span dir="auto">{path}</span>
-              </button>
-            ))}
-            <div className="nav-label">{t("ТИПЫ ЗАПИСЕЙ")}</div>
+            <div className="nav-gap" />
             {Object.entries(types).map(([key]) => (
               <button
                 key={key}
@@ -640,6 +700,11 @@ export default function App() {
                 onClick={() => {
                   setPage("vault");
                   setKind(kind === key ? "" : key);
+                  if (!draft && !groupDraft) {
+                    setSelected(undefined);
+                    setHistory([]);
+                    setRevealed({});
+                  }
                 }}
               >
                 <Icon name={key} />
@@ -720,7 +785,7 @@ export default function App() {
           {page === "settings" ? (
             <Settings
               login={status.unlocked ? status.login : undefined}
-              server={server}
+              server={activeServer}
               online={status.online}
               busy={busy}
               timeout={timeout}
@@ -1007,28 +1072,36 @@ export default function App() {
           ) : (
             <>
               <section className="page-title">
-                <div>
-                  <div className="eyebrow">
-                    {status.login}
-                    {t("/ ЛИЧНОЕ")}
-                  </div>
-                  <h1>{archive ? t("Архив") : t("Ваше хранилище")}</h1>
-                  <p className="muted">{t("Тихое место для важных вещей.")}</p>
+                <div className="account-identity">
+                  <strong>
+                    <bdi>{status.login}</bdi>
+                  </strong>
+                  <span dir="ltr">{activeServer}</span>
+                  {archive && <small>{t("Архив")}</small>}
                 </div>
-                <button
-                  className="primary"
-                  disabled={busy || !status.online}
-                  onClick={requestNew}
-                >
-                  {t("＋ Добавить запись")}
-                </button>
+                <div className="page-actions">
+                  <button
+                    className="secondary"
+                    disabled={busy || !status.online || needsSync}
+                    onClick={() => requestLeave(() => beginGroup())}
+                  >
+                    {t("Создать группу")}
+                  </button>
+                  <button
+                    className="primary"
+                    disabled={busy || !status.online}
+                    onClick={requestNew}
+                  >
+                    {t("＋ Добавить запись")}
+                  </button>
+                </div>
               </section>
               <div className="vault-grid">
                 <section className="records-panel">
                   <div className="search">
                     <span>⌕</span>
                     <input
-                      placeholder={t("Поиск по названию, папке или тегу")}
+                      placeholder={t("Поиск по названию, группе или тегу")}
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                     />
@@ -1037,39 +1110,21 @@ export default function App() {
                     {t(kind ? types[kind].label : t("Все типы"))}
                     <span>
                       {t("Записи")}:{" "}
-                      {new Intl.NumberFormat(language).format(visible.length)}
+                      {new Intl.NumberFormat(language).format(
+                        visibleCount(tree),
+                      )}
                     </span>
                   </div>
-                  {visible.length ? (
-                    visible.map((e) => (
-                      <button
-                        key={e.record_id}
-                        className={
-                          selected?.record_id === e.record_id
-                            ? "record selected"
-                            : "record"
-                        }
-                        data-record-id={e.record_id}
-                        onClick={() => requestLeave(() => open(e))}
-                      >
-                        <span className="record-icon">
-                          <Icon name={e.data.record_type} />
-                        </span>
-                        <span>
-                          <strong>
-                            <bdi>{e.data.title}</bdi>
-                          </strong>
-                          <small>
-                            {t(
-                              types[e.data.record_type]?.label ??
-                                t("Неизвестный тип"),
-                            )}
-                            {e.data.folder ? " · " + e.data.folder : ""}
-                          </small>
-                        </span>
-                        <span className="arrow">›</span>
-                      </button>
-                    ))
+                  {tree.length ? (
+                    <EntryTree
+                      reveal={treeReveal}
+                      nodes={tree}
+                      activeGroup={selectedGroup?.id ?? null}
+                      selected={selected?.record_id}
+                      onGroup={selectGroup}
+                      onEntry={(entry) => requestLeave(() => open(entry))}
+                      searching={!!query.trim()}
+                    />
                   ) : (
                     <div className="empty">
                       <span>◇</span>
@@ -1085,7 +1140,18 @@ export default function App() {
                   )}
                 </section>
                 <section className="detail-panel">
-                  {draft ? (
+                  {groupDraft ? (
+                    <GroupEditor
+                      draft={groupDraft}
+                      groups={groups}
+                      onChange={setGroupDraft}
+                      onSave={() => {
+                        void saveGroup();
+                      }}
+                      onCancel={() => requestLeave(() => setGroupDraft(null))}
+                      disabled={busy || !status.online || needsSync}
+                    />
+                  ) : draft ? (
                     <>
                       <div className="detail-heading">
                         <h2>
@@ -1271,40 +1337,20 @@ export default function App() {
                       </label>
                       <div className="two">
                         <label>
-                          {t("Папка")}
+                          {t("Группа")}
                           <select
-                            value={newFolder ? "__new" : draft.folder}
-                            onChange={(e) => {
-                              const fresh = e.target.value === "__new";
-                              setNewFolder(fresh);
-                              if (!fresh)
-                                setDraft({ ...draft, folder: e.target.value });
-                            }}
+                            value={draftGroup ?? ""}
+                            onChange={(e) =>
+                              setDraftGroup(e.target.value || null)
+                            }
                           >
-                            <option value="">{t("Без папки")}</option>
-                            {[
-                              ...new Set([
-                                ...folders,
-                                ...(draft.folder ? [draft.folder] : []),
-                              ]),
-                            ].map((value) => (
-                              <option key={value} value={value}>
-                                {value}
+                            <option value="">{t("Корень списка")}</option>
+                            {groups.map((g) => (
+                              <option key={g.id} value={g.id}>
+                                {groupLabel(g.id, groups)}
                               </option>
                             ))}
-                            <option value="__new">{t("Новая папка…")}</option>
                           </select>
-                          {newFolder && (
-                            <input
-                              aria-label={t("Путь папки")}
-                              placeholder={t("Папка / Подпапка")}
-                              value={draft.folder}
-                              onChange={(e) =>
-                                setDraft({ ...draft, folder: e.target.value })
-                              }
-                            />
-                          )}
-                          <small>{t("Подпапки разделяются знаком /")}</small>
                         </label>
                         <label>
                           {t("Теги через запятую")}
@@ -1408,9 +1454,14 @@ export default function App() {
                         selected.data.fields.never_expires === "true" && (
                           <p>{t("Бессрочный документ")}</p>
                         )}
-                      {selected.data.folder && (
+                      {parentOf(selected.data, groups) && (
                         <p className="muted">
-                          <bdi>{selected.data.folder}</bdi>
+                          <bdi>
+                            {groupLabel(
+                              parentOf(selected.data, groups),
+                              groups,
+                            )}
+                          </bdi>
                         </p>
                       )}
                       {selected.data.notes && (
@@ -1433,7 +1484,7 @@ export default function App() {
                             busy || !status.online || needsSync || archive
                           }
                           onClick={() => (
-                            setNewFolder(false),
+                            setDraftGroup(parentOf(selected.data, groups)),
                             setDraft(structuredClone(selected.data))
                           )}
                         >
@@ -1481,6 +1532,34 @@ export default function App() {
                         </div>
                       )}
                     </>
+                  ) : selectedGroup ? (
+                    <div className="group-detail">
+                      <Icon name="folder" />
+                      <h2>
+                        <bdi>{selectedGroup.title}</bdi>
+                      </h2>
+                      <p className="muted">
+                        <bdi>{groupLabel(selectedGroup.id, groups)}</bdi>
+                      </p>
+                      <div className="actions">
+                        <button
+                          className="primary"
+                          disabled={busy || !status.online || needsSync}
+                          onClick={() =>
+                            beginNew(kind || "login", selectedGroup.id)
+                          }
+                        >
+                          {t("Добавить запись")}
+                        </button>
+                        <button
+                          className="secondary"
+                          disabled={busy || !status.online || needsSync}
+                          onClick={() => beginGroup(selectedGroup.id)}
+                        >
+                          {t("Создать подгруппу")}
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <div className="empty detail-empty">
                       <span>⌁</span>

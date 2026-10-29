@@ -5,6 +5,7 @@ export type Data = {
   fields: Record<string, string>;
   notes: string;
   folder: string;
+  group_id?: string | null;
   tags: string[];
 };
 export type Entry = {
@@ -127,6 +128,11 @@ export function filterEntries(
 }
 export function errorText(error: unknown): string {
   const s = error instanceof Error ? error.message : String(error);
+  if (s.includes("GROUP_NOT_FOUND"))
+    return "Группа недоступна. Синхронизируйте устройства.";
+  if (s.includes("INVALID_GROUP")) return "Недопустимая структура групп.";
+  if (s.includes("GROUP_OPERATION_REQUIRED"))
+    return "Для группы требуется отдельное действие.";
   if (s.includes("SERVER_PIN_MISMATCH"))
     return "Этот аккаунт или сертификат относится к другому серверу.";
   if (s.includes("ACCOUNT_EXISTS"))
@@ -135,7 +141,12 @@ export function errorText(error: unknown): string {
     return "Неверный или просроченный код подтверждения.";
   if (s.includes("RATE_LIMITED"))
     return "Слишком много запросов. Повторите позже.";
-  if (s.includes("SERVER_ID_CHANGED") || s.includes("SERVER_KEY_CHANGED") || s.includes("PUBLIC_KEY_MISMATCH") || s.includes("ACCOUNT_CHANGED"))
+  if (
+    s.includes("SERVER_ID_CHANGED") ||
+    s.includes("SERVER_KEY_CHANGED") ||
+    s.includes("PUBLIC_KEY_MISMATCH") ||
+    s.includes("ACCOUNT_CHANGED")
+  )
     return "Сервер или ключи аккаунта изменились. Вход остановлен.";
   if (s.includes("UNSUPPORTED_"))
     return "Версия сервера или данных не поддерживается.";
@@ -148,5 +159,7 @@ export function errorText(error: unknown): string {
   if (s.includes("OFFLINE_READ_ONLY"))
     return "Офлайн доступен только просмотр.";
   if (s.includes("LOCKED")) return "Хранилище заблокировано.";
-  return /^[A-Z][A-Z_]{3,}$/.test(s) ? "Операция не выполнена. Проверьте соединение и повторите." : s;
+  return /^[A-Z][A-Z_]{3,}$/.test(s)
+    ? "Операция не выполнена. Проверьте соединение и повторите."
+    : s;
 }

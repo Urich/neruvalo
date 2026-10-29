@@ -869,3 +869,112 @@ kbd {
   background: #e5efdf;
   border-color: #8bb7a1;
 }
+.nav-gap {
+  height: 16px;
+}
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.account-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  max-width: 60%;
+}
+.account-identity strong {
+  font-size: 19px;
+  font-weight: 550;
+}
+.account-identity > span {
+  font-size: 12px;
+  color: #61746b;
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+  text-align: start;
+}
+.account-identity small {
+  color: #61746b;
+}
+.entry-tree {
+  overflow-x: auto;
+  padding: 6px 0 14px;
+}
+.tree-item:focus {
+  outline: none;
+}
+.tree-item:focus-visible > .tree-row {
+  outline: 2px solid #8bb7a1;
+  outline-offset: -2px;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  padding-inline-end: 12px;
+  border-inline-start: 3px solid transparent;
+}
+.tree-row:hover {
+  background: #fafbf7;
+}
+.tree-row.selected {
+  background: #f0f5ec;
+  border-inline-start-color: #5d8762;
+}
+.tree-record.record,
+.tree-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 12px 4px;
+  color: #233d36;
+  text-align: start;
+}
+.tree-record.record:hover {
+  background: transparent;
+}
+.tree-group > span:last-child,
+.tree-record > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tree-group strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.tree-group small {
+  display: block;
+  font-size: 10px;
+  color: #7c8c75;
+  margin-top: 5px;
+}
+.tree-group .record-icon {
+  background: #e5eddf;
+}
+.tree-toggle,
+.tree-spacer {
+  width: 24px;
+  min-width: 24px;
+}
+.tree-toggle {
+  background: transparent;
+  color: #61746b;
+  padding: 8px 0;
+}
+.group-detail > .icon {
+  width: 40px;
+  height: 40px;
+  color: #71916d;
+  margin-bottom: 20px;
+}
+@media (max-width: 700px) {
+  .account-identity {
+    max-width: 100%;
+  }
+}

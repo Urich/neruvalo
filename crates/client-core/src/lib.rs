@@ -17,6 +17,8 @@ use std::{
 };
 use uuid::Uuid;
 use zeroize::Zeroizing;
+mod groups;
+pub use groups::GroupView;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Profile {
@@ -45,7 +47,11 @@ pub struct RecordData {
 }
 impl RecordData {
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.schema_version == 1, "UNSUPPORTED_FORMAT");
+        let group = self.record_type == "group";
+        ensure!(
+            self.schema_version == if group { 2 } else { 1 },
+            "UNSUPPORTED_FORMAT"
+        );
         ensure!(
             [
                 "login",
@@ -55,7 +61,8 @@ impl RecordData {
                 "api_token",
                 "ssh_key",
                 "document",
-                "crypto_wallet"
+                "crypto_wallet",
+                "group"
             ]
             .contains(&self.record_type.as_str()),
             "UNSUPPORTED_TYPE"
@@ -64,6 +71,33 @@ impl RecordData {
             !self.title.trim().is_empty() && self.title.len() <= 1024,
             "Title is required (maximum 1024 bytes)"
         );
+        for key in if group {
+            &["parent_group_id"][..]
+        } else {
+            &["group_id"][..]
+        } {
+            if let Some(value) = self.extra.get(*key) {
+                ensure!(
+                    value.is_null() || value.as_str().is_some_and(|s| Uuid::parse_str(s).is_ok()),
+                    "INVALID_GROUP"
+                );
+            }
+        }
+        if group {
+            ensure!(
+                self.fields.is_empty()
+                    && self.notes.is_empty()
+                    && self.folder.is_empty()
+                    && self.tags.is_empty(),
+                "INVALID_GROUP"
+            );
+            if let Some(path) = self.extra.get("legacy_path") {
+                ensure!(
+                    path.as_str().is_some_and(|p| !p.is_empty()),
+                    "INVALID_GROUP"
+                );
+            }
+        }
         ensure!(
             serde_json::to_vec(self)?.len() <= 256 * 1024,
             "Record exceeds 256 KiB"
@@ -257,7 +291,7 @@ impl Client {
     pub fn status(&mut self) -> Value {
         match self.unlocked() {
             Ok(a) => {
-                json!({"unlocked":true,"profile":a.profile.id,"login":a.profile.login,"online":a.online,"timeout_seconds":a.profile.timeout_seconds})
+                json!({"unlocked":true,"profile":a.profile.id,"login":a.profile.login,"server":a.profile.server,"online":a.online,"timeout_seconds":a.profile.timeout_seconds})
             }
             Err(_) => json!({"unlocked":false}),
         }
@@ -692,6 +726,14 @@ impl Client {
         Ok(json!({"synced":true,"versions":versions.len()}))
     }
     pub async fn list(&mut self) -> Result<Vec<ViewRecord>> {
+        Ok(self
+            .objects()
+            .await?
+            .into_iter()
+            .filter(|r| r.data.record_type != "group")
+            .collect())
+    }
+    async fn objects(&mut self) -> Result<Vec<ViewRecord>> {
         let a = self.unlocked()?;
         let rows=sqlx::query("SELECT v.body FROM versions v WHERE v.revision=(SELECT MAX(v2.revision) FROM versions v2 WHERE v2.record_id=v.record_id) ORDER BY v.record_id").fetch_all(&a.cache).await?;
         rows.into_iter()
@@ -722,7 +764,20 @@ impl Client {
         data: RecordData,
         archived: bool,
     ) -> Result<Value> {
+        ensure!(data.record_type != "group", "GROUP_OPERATION_REQUIRED");
+        self.save_object(id, expected_revision, data, archived, None)
+            .await
+    }
+    async fn save_object(
+        &mut self,
+        id: Option<String>,
+        expected_revision: i64,
+        data: RecordData,
+        archived: bool,
+        creation_id: Option<String>,
+    ) -> Result<Value> {
         data.validate()?;
+        self.validate_group_link(id.as_deref(), &data).await?;
         let http = self.http.clone();
         let a = self.unlocked()?;
         ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
@@ -744,12 +799,18 @@ impl Client {
             .ok_or_else(|| anyhow!("RECORD_NOT_FOUND"))?;
             let v: StoredVersion = serde_json::from_str(&row.get::<String, _>("body"))?;
             ensure!(v.revision == expected_revision, "RECORD_VERSION_MISMATCH");
+            ensure!(
+                (view(a, &v)?.data.record_type == "group") == (data.record_type == "group"),
+                "GROUP_OPERATION_REQUIRED"
+            );
             Some(v.version_id)
         } else {
             ensure!(expected_revision == 0, "INVALID_REVISION");
             None
         };
-        let id = id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let id = id
+            .or(creation_id)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let version = Uuid::new_v4().to_string();
         let raw = Zeroizing::new(serde_json::to_vec(&data)?);
         let payload = crypto::encrypt_version(

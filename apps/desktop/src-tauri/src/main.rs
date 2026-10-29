@@ -130,11 +130,29 @@ async fn command(
                 c.unlock_offline(&text(r, "id")?, password).await
             }
             "sync" => c.sync().await,
+            "groups" => Ok(serde_json::to_value(c.groups().await?)?),
+            "create_group" => {
+                c.create_group(text(r, "title")?, r["parent"].as_str())
+                    .await
+            }
             "list" => Ok(serde_json::to_value(c.list().await?)?),
             "history" => Ok(serde_json::to_value(c.history(&text(r, "id")?).await?)?),
             "save" => {
                 let data: RecordData = serde_json::from_value(r["data"].take())?;
                 let id = r["id"].as_str().map(str::to_owned);
+                if r.get("group").is_some() {
+                    return c
+                        .save_in_group(
+                            id,
+                            r["expected_revision"]
+                                .as_i64()
+                                .ok_or_else(|| anyhow!("Missing revision"))?,
+                            data,
+                            r["archived"].as_bool().unwrap_or(false),
+                            r["group"].as_str(),
+                        )
+                        .await;
+                }
                 c.save(
                     id,
                     r["expected_revision"]

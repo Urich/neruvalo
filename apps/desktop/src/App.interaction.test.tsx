@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import App from "./App";
+import { Group } from "./groups";
 import { empty, Entry } from "./model";
 import { setPreference } from "./i18n";
 const native = vi.hoisted(() => ({
@@ -12,6 +13,9 @@ const native = vi.hoisted(() => ({
   online: true,
   pinned: "",
   servers: ["https://a.example", "https://b.example"],
+  groups: [] as Group[],
+  records: [] as Entry[],
+  activeServer: "https://a.example",
   lock: undefined as (() => void) | undefined,
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
@@ -101,6 +105,9 @@ beforeEach(() => {
   native.online = true;
   native.pinned = "";
   native.servers = ["https://a.example", "https://b.example"];
+  native.records = structuredClone(entries);
+  native.groups = [];
+  native.activeServer = "https://a.example";
   native.invoke.mockReset();
   native.listen.mockReset();
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -123,12 +130,45 @@ beforeEach(() => {
           unlocked: native.unlocked,
           online: native.online,
           login: "alice",
+          server: native.activeServer,
           timeout_seconds: 60,
         };
       case "list":
-        return entries;
+        return native.records;
+      case "groups":
+        return native.groups;
+      case "create_group": {
+        const id =
+          "00000000-0000-4000-8000-" +
+          String(native.groups.length + 1).padStart(12, "0");
+        native.groups.push({ id, title: r.title, parent_id: r.parent });
+        return { record_id: id };
+      }
+      case "save": {
+        const id = r.id ?? "created-record";
+        const value = {
+          record_id: id,
+          version_id: "new",
+          revision: (r.expected_revision ?? 0) + 1,
+          archived: !!r.archived,
+          data: {
+            ...r.data,
+            ...(Object.hasOwn(r, "group") ? { group_id: r.group } : {}),
+          },
+        };
+        native.records = [
+          ...native.records.filter((e) => e.record_id !== id),
+          value,
+        ];
+        return { record_id: id, group_id: r.group ?? null };
+      }
       case "login":
       case "unlock_offline":
+        native.activeServer =
+          r.action === "login"
+            ? r.server
+            : native.pinned ||
+              (r.id === "b" ? "https://b.example" : "https://a.example");
         native.unlocked = true;
         return null;
       case "history":
@@ -160,7 +200,20 @@ describe("login and local server history", () => {
       native.invoke.mock.calls.some(([, a]) => a.request.action === "login"),
     ).toBe(false);
     await login();
-    expect(document.querySelector(".nav-label")).not.toBeNull();
+    expect(document.querySelector(".nav-label")).toBeNull();
+    expect(
+      [...document.querySelectorAll(".sidebar button")].some((b) =>
+        b.textContent?.includes("Все записи"),
+      ),
+    ).toBe(true);
+    expect(document.querySelector(".account-identity")?.textContent).toContain(
+      "alicehttps://a.example",
+    );
+    expect(document.body.textContent).not.toContain("Ваше хранилище");
+    expect(document.body.textContent).not.toContain(
+      "Тихое место для важных вещей.",
+    );
+    expect(document.body.textContent).not.toContain("ЛИЧНОЕ");
     await click(button("Заблокировать"));
     expect(document.querySelector(".nav-label")).toBeNull();
   });
@@ -214,21 +267,22 @@ describe("settings, language and folders", () => {
     ).toBe("Never translate this secret");
     expect(localStorage.getItem("neruvalo.language")).toContain("ar");
   });
-  it("filters a parent folder independently of record type", async () => {
+  it("shows legacy folders in the main tree while filtering entries by type", async () => {
     await mount();
     await login();
+    expect(document.querySelector(".sidebar [data-group-id]")).toBeNull();
     await click(button("Banks"));
+    expect(document.querySelectorAll(".record")).toHaveLength(2);
     expect(
-      [...document.querySelectorAll(".record strong")].map(
-        (n) => n.textContent,
-      ),
-    ).toEqual(["Two"]);
-    await click(button("Логин и пароль"));
-    expect(document.querySelectorAll(".record")).toHaveLength(1);
+      document.querySelector('[role="tree"] [data-group-id="legacy:Banks/A"]'),
+    ).not.toBeNull();
+    await click(button("Заметка"));
+    expect(document.querySelectorAll(".record")).toHaveLength(0);
+    expect(button("Banks")).toBeDefined();
   });
 });
 describe("universal document editor", () => {
-  it("saves country, template, leading zeros, custom fields and a normalized new folder", async () => {
+  it("saves country, template, leading zeros, custom fields and a chosen tree group", async () => {
     await mount();
     await login();
     await click(button("Документы"));
@@ -251,20 +305,14 @@ describe("universal document editor", () => {
     await change(input("Дополнительное поле")!, "Local identifier");
     await click(button("Добавить поле"));
     await change(input("Local identifier")!, "0007");
-    await change(select("Папка")!, "__new");
-    await change(
-      document.querySelector<HTMLInputElement>(
-        'input[aria-label="Путь папки"]',
-      )!,
-      " Travel / Armenia ",
-    );
+    await change(select("Группа")!, "legacy:Banks/A");
     await click(button("Зашифровать и сохранить"));
     const saved = native.invoke.mock.calls.find(
       ([, a]) => a.request.action === "save",
     )?.[1].request.data;
     expect(saved).toMatchObject({
       record_type: "document",
-      folder: "Travel/Armenia",
+      folder: "",
       fields: {
         template: "passport",
         country: "Armenia",
@@ -284,16 +332,14 @@ describe("copy actions and draft protection", () => {
       "Unfinished",
     );
     await act(async () =>
-      document
-        .querySelectorAll(".record")[1]
-        .dispatchEvent(
-          new MouseEvent("contextmenu", {
-            bubbles: true,
-            cancelable: true,
-            clientX: 30,
-            clientY: 50,
-          }),
-        ),
+      document.querySelector('[data-record-id="Two"] .record')!.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 30,
+          clientY: 50,
+        }),
+      ),
     );
     await click(
       button("Скопировать пароль", document.querySelector('[role="menu"]')!),
@@ -381,5 +427,176 @@ describe("copy actions and draft protection", () => {
     expect(
       document.querySelector<HTMLInputElement>(".detail-panel input")?.value,
     ).toBe("Unfinished");
+  });
+});
+
+describe("nested groups in the main records list", () => {
+  async function createGroup(title: string) {
+    const input = document.querySelector<HTMLInputElement>(
+      ".detail-panel input",
+    )!;
+    await change(input, title);
+    await click(
+      button("Создать группу", document.querySelector(".detail-panel")!),
+    );
+  }
+  it("creates an empty group and subgroup, then a different entry type inside them", async () => {
+    await mount();
+    await login();
+    await click(button("Заметка"));
+    await click(button("Создать группу"));
+    await createGroup("My bank");
+    expect(native.groups[0]).toMatchObject({
+      title: "My bank",
+      parent_id: null,
+    });
+    expect(document.querySelector('[role="tree"]')?.textContent).toContain(
+      "My bank",
+    );
+    await click(button("Создать подгруппу"));
+    await createGroup("Cards");
+    expect(native.groups[1].parent_id).toBe(native.groups[0].id);
+    await click(
+      button("Добавить запись", document.querySelector(".detail-panel")!),
+    );
+    await click(
+      button("Банковская карта", document.querySelector(".type-picker")!),
+    );
+    await click(button("Продолжить"));
+    await change(
+      document.querySelector<HTMLInputElement>(".detail-panel input")!,
+      "Card 001",
+    );
+    await click(button("Зашифровать и сохранить"));
+    const saved = native.invoke.mock.calls.find(
+      ([, a]) => a.request.action === "save",
+    )?.[1].request;
+    expect(saved).toMatchObject({
+      group: native.groups[1].id,
+      data: { record_type: "bank_card", title: "Card 001" },
+    });
+    const node = document.querySelector(
+      `[data-group-id="${native.groups[1].id}"]`,
+    )!;
+    expect(
+      node.querySelector('[data-record-id="created-record"]'),
+    ).not.toBeNull();
+    // A card created from the Note filter is revealed rather than apparently lost.
+    expect(
+      document.querySelector('[data-record-id="created-record"]'),
+    ).not.toBeNull();
+  });
+  it("expands/collapses branches and retains ancestor context during search", async () => {
+    await mount();
+    await login();
+    const root = document.querySelector<HTMLElement>(
+      '[data-group-id="legacy:Banks"]',
+    )!;
+    await click(
+      root.querySelector<HTMLElement>(":scope > .tree-row .tree-toggle")!,
+    );
+    expect(document.querySelector('[data-record-id="Two"]')).toBeNull();
+    await change(
+      document.querySelector<HTMLInputElement>(".search input")!,
+      "Two",
+    );
+    expect(document.querySelector('[data-record-id="Two"]')).not.toBeNull();
+    expect(
+      document.querySelector('[data-group-id="legacy:Banks/A"]'),
+    ).not.toBeNull();
+    expect(document.querySelector('[data-record-id="One"]')).toBeNull();
+  });
+  it("uses the right-clicked group as parent and protects an open entry draft", async () => {
+    await mount();
+    await login();
+    await click(button("＋ Добавить запись"));
+    await change(
+      document.querySelector<HTMLInputElement>(".detail-panel input")!,
+      "Unsaved secret",
+    );
+    const row = document.querySelector('[data-group-id="legacy:Banks/A"]')!;
+    await act(async () =>
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    );
+    await click(
+      button("Создать подгруппу", document.querySelector('[role="menu"]')!),
+    );
+    expect(document.querySelector("dialog")).not.toBeNull();
+    await click(button("Продолжить редактирование"));
+    expect(
+      document.querySelector<HTMLInputElement>(".detail-panel input")?.value,
+    ).toBe("Unsaved secret");
+    expect(
+      native.invoke.mock.calls.some(
+        ([, a]) => a.request.action === "create_group",
+      ),
+    ).toBe(false);
+  });
+  it("shows offline groups but disables creation and clears the tree on lock", async () => {
+    native.online = false;
+    native.groups = [
+      { id: "saved-empty", title: "Offline empty", parent_id: null },
+    ];
+    await mount();
+    await login();
+    expect(button("Создать группу").disabled).toBe(true);
+    expect(button("Offline empty")).toBeDefined();
+    await act(async () => {
+      native.unlocked = false;
+      native.lock!();
+    });
+    expect(document.querySelector('[role="tree"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Offline empty");
+  });
+  it("shows the unlocked offline profile server instead of the previous form address", async () => {
+    await mount();
+    const profile =
+      document.querySelector<HTMLSelectElement>(".auth-card select")!;
+    await change(profile, "b");
+    await login();
+    expect(document.querySelector(".account-identity")?.textContent).toContain(
+      "https://b.example",
+    );
+  });
+});
+
+describe("stale status response after lock", () => {
+  it("does not restore the former account identity or tree", async () => {
+    vi.useFakeTimers();
+    try {
+      await mount();
+      await login();
+      let finish: ((value: unknown) => void) | undefined;
+      const original = native.invoke.getMockImplementation()!;
+      native.invoke.mockImplementation(async (command, args) =>
+        args.request.action === "status"
+          ? new Promise((resolve) => {
+              finish = resolve;
+            })
+          : original(command, args),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await act(async () => {
+        native.unlocked = false;
+        native.lock!();
+      });
+      await act(async () => {
+        finish!({
+          unlocked: true,
+          online: true,
+          login: "old-account",
+          server: "https://old.example",
+        });
+      });
+      expect(document.querySelector(".account-identity")).toBeNull();
+      expect(document.querySelector('[role="tree"]')).toBeNull();
+      expect(document.body.textContent).not.toContain("old-account");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
