@@ -3,6 +3,14 @@
 set -euo pipefail
 umask 077
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+sqlite_url() {
+ local LC_ALL=C filename=$1 encoded='' byte index
+ for ((index=0; index<${#filename}; index++)); do
+  printf -v byte '%%%02X' "'${filename:index:1}"
+  encoded+=$byte
+ done
+ printf 'sqlite:%s?mode=rwc' "$encoded"
+}
 command -v cargo >/dev/null || { echo 'Install Rust (stable) and rerun. See docs/prototype.ru.md.' >&2; exit 1; }
 command -v cc >/dev/null || { echo 'A C compiler is required to build bundled SQLite.' >&2; exit 1; }
 echo 'Neruvalo development prototype — TEST DATA ONLY.'
@@ -13,7 +21,7 @@ install_dir=${install_dir:-"$HOME/neruvalo-prototype"}
 [[ ! -e "$install_dir" ]] || { echo 'Target already exists; no files were changed.' >&2; exit 1; }
 read -r -p 'Database: 1) SQLite  2) existing PostgreSQL [1]: ' database_choice
 case ${database_choice:-1} in
- 1) database_url="sqlite://$install_dir/data/server.sqlite3?mode=rwc" ;;
+ 1) database_url=$(sqlite_url "$install_dir/data/server.sqlite3") ;;
  2) read -r -s -p 'PostgreSQL URL (dedicated EMPTY database; hidden): ' database_url; echo
     [[ $database_url == postgres://* || $database_url == postgresql://* ]] || { echo 'Invalid PostgreSQL URL.' >&2; exit 1; } ;;
  *) echo 'Unknown choice.' >&2; exit 1 ;;
