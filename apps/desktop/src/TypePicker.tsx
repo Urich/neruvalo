@@ -62,6 +62,7 @@ export function TypePicker({
       }}
     >
       <button
+        className="secondary type-select-trigger"
         ref={trigger}
         type="button"
         disabled={disabled}

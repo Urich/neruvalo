@@ -775,15 +775,7 @@ export default function App() {
             ))}
           </>
         )}
-        <div className="sidebar-foot">
-          <span className="shield">◇</span>
-          <p>
-            {t("Ваши секреты шифруются")}
-            <br />
-            {t("на вашем устройстве.")}
-          </p>
-          <small>{t("Только тестовые данные")}</small>
-        </div>
+        <div className="sidebar-bottom">
         <button
           className={page === "settings" ? "nav active" : "nav"}
           onClick={() => setPage(page === "settings" ? "vault" : "settings")}
@@ -798,6 +790,16 @@ export default function App() {
           <Icon name="info" />
           <span>{t("О программе")}</span>
         </button>
+        <div className="sidebar-foot">
+          <span className="shield">◇</span>
+          <p>
+            {t("Ваши секреты шифруются")}
+            <br />
+            {t("на вашем устройстве.")}
+          </p>
+          <small>{t("Только тестовые данные")}</small>
+        </div>
+        </div>
       </aside>
       <main>
         <header>
@@ -1624,6 +1626,7 @@ export default function App() {
                           {t("Создать подгруппу")}
                         </button>
                         <button
+                          className="secondary"
                           disabled={busy || !status.online || needsSync}
                           onClick={() =>
                             setArchiveRequest({

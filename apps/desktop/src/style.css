@@ -989,3 +989,23 @@ kbd {
 .about-panel summary {cursor:pointer;font-weight:600;}
 .about-panel dd {margin:8px 0 16px;}
 .about-panel .about-license {font-size:12px;line-height:1.5;direction:ltr;text-align:left;padding:12px;background:#f2f5ef;}
+
+/* Sidebar navigation and custom type selector share the application palette. */
+.sidebar .brand { margin-bottom: 28px; }
+.sidebar-bottom { margin-top: auto; }
+.sidebar-bottom .sidebar-foot { margin-top: 0; padding: 20px 12px 0; }
+.type-dropdown .type-select-trigger { min-height: 44px; justify-content: flex-start; }
+.type-select-trigger > span:first-of-type { flex: 1; }
+.type-options button {
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #315d45;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.type-options button + button { margin-top: 3px; }
+.type-options button:hover:not(:disabled),
+.type-options button:focus-visible { background: #edf2e8; border-color: #dce6d4; }
+.type-options button[aria-selected="true"] { background: #dfe8d8; color: #28543f; }
