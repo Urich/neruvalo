@@ -277,6 +277,63 @@ async fn server_idempotency_authorization_and_tampered_requests() {
         .unwrap();
     assert!(replay.status().is_success());
     assert_eq!(replay.json::<Value>().await.unwrap(), first);
+    // Reconstruct and replay a committed batch exactly as after a lost response.
+    c.archive_tree(&request.record_id, true).await.unwrap();
+    let snapshot: Value = http
+        .get(format!("{server}/api/v1/snapshot"))
+        .bearer_auth(&session.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let archived: StoredVersion = serde_json::from_value(
+        snapshot["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["revision"] == 2)
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let batch = neruvalo_protocol::SaveBatch {
+        operation_id: archived.operation_id.clone(),
+        snapshot: BTreeMap::from([(request.record_id.clone(), 1)]),
+        records: vec![SaveRecord {
+            operation_id: archived.operation_id,
+            record_id: archived.record_id,
+            expected_revision: 1,
+            version_id: archived.version_id,
+            previous_version: archived.previous_version,
+            payload: archived.payload,
+            signature: archived.signature,
+            archived: true,
+        }],
+    };
+    let replay = http
+        .post(format!("{server}/api/v1/records/batch"))
+        .bearer_auth(&session.token)
+        .json(&batch)
+        .send()
+        .await
+        .unwrap();
+    assert!(replay.status().is_success());
+    let mut changed = batch.clone();
+    changed.snapshot.clear();
+    assert_eq!(
+        http.post(format!("{server}/api/v1/records/batch"))
+            .bearer_auth(&session.token)
+            .json(&changed)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    c.sync().await.unwrap();
+    assert_eq!(c.history(&request.record_id).await.unwrap().len(), 2);
     request.payload["data"]["ciphertext"] = Value::String("changed".into());
     let bad = http
         .post(format!("{server}/api/v1/records/save"))
@@ -425,5 +482,121 @@ async fn encrypted_groups_legacy_paths_and_offline_tree() {
     assert!(!bodies.contains("Private empty group"));
     assert!(!bodies.contains("Private Bank"));
     pool.close().await;
+    handle.abort();
+}
+
+#[tokio::test]
+async fn atomic_group_archive_restore_and_conflict() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (server, handle) = start(root).await;
+    let mut a = Client::new(root.join("archive-a")).unwrap();
+    register(&mut a, &server, "archiveuser", root).await;
+    a.login(&server, "archiveuser", password()).await.unwrap();
+    let group = a.create_group("Bank".into(), None).await.unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sub = a.create_group("Cards".into(), Some(&group)).await.unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let empty = a.create_group("Empty".into(), Some(&group)).await.unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let first = a
+        .save_in_group(None, 0, data("One", "secret-1"), false, Some(&sub))
+        .await
+        .unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second = a
+        .save_in_group(None, 0, data("Two", "secret-2"), false, Some(&sub))
+        .await
+        .unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    a.archive_tree(&second, true).await.unwrap();
+    let mut b = Client::new(root.join("archive-b")).unwrap();
+    b.login(&server, "archiveuser", password()).await.unwrap();
+    // A newly inserted child must invalidate the entire batch, without partial changes.
+    a.save_in_group(None, 0, data("Concurrent", "secret-3"), false, Some(&group))
+        .await
+        .unwrap();
+    assert!(b
+        .archive_tree(&group, true)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("RECORD_VERSION_MISMATCH"));
+    b.sync().await.unwrap();
+    assert!(b.groups().await.unwrap().iter().all(|g| !g.archived));
+    assert!(
+        !b.list()
+            .await
+            .unwrap()
+            .iter()
+            .find(|r| r.record_id == first)
+            .unwrap()
+            .archived
+    );
+    b.archive_tree(&group, true).await.unwrap();
+    assert!(a
+        .save_in_group(None, 0, data("Stale child", "x"), false, Some(&sub))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("RECORD_VERSION_MISMATCH"));
+    assert!(b.groups().await.unwrap().iter().all(|g| g.archived));
+    assert!(b.list().await.unwrap().iter().all(|r| r.archived));
+    assert_eq!(b.history(&second).await.unwrap().len(), 2); // no duplicate archive version
+    b.archive_tree(&first, false).await.unwrap();
+    let groups = b.groups().await.unwrap();
+    assert!(!groups.iter().find(|g| g.id == group).unwrap().archived);
+    assert!(!groups.iter().find(|g| g.id == sub).unwrap().archived);
+    assert!(groups.iter().find(|g| g.id == empty).unwrap().archived);
+    assert!(
+        b.list()
+            .await
+            .unwrap()
+            .iter()
+            .find(|r| r.record_id == second)
+            .unwrap()
+            .archived
+    );
+    assert!(b
+        .save_in_group(None, 0, data("Denied", "x"), false, Some(&empty))
+        .await
+        .is_err());
+    b.archive_tree(&group, false).await.unwrap();
+    assert!(b.groups().await.unwrap().iter().all(|g| !g.archived));
+    assert!(b.list().await.unwrap().iter().all(|r| !r.archived));
+    assert_eq!(b.history(&first).await.unwrap().len(), 3);
+    assert_eq!(b.history(&second).await.unwrap().len(), 3);
+    b.archive_tree(&empty, true).await.unwrap();
+    assert!(
+        b.groups()
+            .await
+            .unwrap()
+            .iter()
+            .find(|g| g.id == empty)
+            .unwrap()
+            .archived
+    );
+    let profile = b.profiles().await.unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    b.lock();
+    b.unlock_offline(&profile, password()).await.unwrap();
+    assert!(b
+        .archive_tree(&group, true)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("OFFLINE_READ_ONLY"));
     handle.abort();
 }

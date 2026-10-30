@@ -5,9 +5,19 @@ import { HistoryVersion } from "./HistoryVersion";
 import { ConfirmNewEntry } from "./ConfirmNewEntry";
 import { useI18n, setSystemLocale } from "./i18n";
 import { Icon } from "./Icon";
+import { ArchiveDialog } from "./ArchiveDialog";
+import { About } from "./About";
+import { TypePicker } from "./TypePicker";
 import { Settings } from "./Settings";
 import { ContextMenu, MenuItem } from "./ContextMenu";
-import { Group, groupsFor, parentOf, groupLabel, entryTree } from "./groups";
+import {
+  Group,
+  groupsFor,
+  parentOf,
+  groupLabel,
+  entryTree,
+  archiveSelection,
+} from "./groups";
 import { EntryTree } from "./EntryTree";
 import { GroupEditor, GroupDraft } from "./GroupEditor";
 import { fieldsOf, documentTemplates, templateLabels } from "./documents";
@@ -38,7 +48,7 @@ async function call<T = any>(
 }
 export default function App() {
   const { t, language } = useI18n();
-  const [page, setPage] = useState<"vault" | "settings">("vault");
+  const [page, setPage] = useState<"vault" | "settings" | "about">("vault");
   const [treeReveal, setTreeReveal] = useState(0);
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
@@ -85,6 +95,11 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("");
   const [archive, setArchive] = useState(false);
+  const [archiveRequest, setArchiveRequest] = useState<{
+    id: string;
+    title: string;
+    archived: boolean;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -105,6 +120,7 @@ export default function App() {
     setSelected(undefined);
     setDraft(undefined);
     setPendingNew(null);
+    setArchiveRequest(null);
     setPendingAction(null);
     setMenu(null);
     setPage("vault");
@@ -349,15 +365,28 @@ export default function App() {
           items = [
             {
               label: t("Добавить запись"),
-              disabled: busy || !status.online || needsSync,
+              disabled: busy || !status.online || needsSync || !!group.archived,
               action: safe(() =>
                 requestLeave(() => beginNew(kind || "login", group.id)),
               ),
             },
             {
               label: t("Создать подгруппу"),
-              disabled: busy || !status.online || needsSync,
+              disabled: busy || !status.online || needsSync || !!group.archived,
               action: safe(() => requestLeave(() => beginGroup(group.id))),
+            },
+            {
+              label: t(archive ? "Вернуть из архива" : "В архив"),
+              disabled: busy || !status.online || needsSync,
+              action: safe(() =>
+                requestLeave(() =>
+                  setArchiveRequest({
+                    id: group.id,
+                    title: group.title,
+                    archived: !archive,
+                  }),
+                ),
+              ),
             },
           ];
         }
@@ -448,6 +477,7 @@ export default function App() {
     });
   }
   function beginGroup(parent: string | null = activeGroup) {
+    if (groups.find((g) => g.id === parent)?.archived) parent = null;
     setSelected(undefined);
     setDraft(undefined);
     setHistory([]);
@@ -465,6 +495,7 @@ export default function App() {
       if (epoch !== generation.current) return;
       setGroupDraft(null);
       setActiveGroup(result.record_id);
+      setKind("");
       setQuery("");
       await refresh();
       setTreeReveal((n) => n + 1);
@@ -482,6 +513,7 @@ export default function App() {
     setRevealed({});
   }
   function beginNew(recordType: string, parent: string | null = activeGroup) {
+    if (groups.find((g) => g.id === parent)?.archived) parent = null;
     setGroupDraft(null);
     setDraftGroup(parent);
     setActiveGroup(parent);
@@ -590,18 +622,32 @@ export default function App() {
     record: Entry | undefined = selected,
   ) {
     if (!record) return;
-    await run(async () => {
-      await call("save", {
+    requestLeave(() =>
+      setArchiveRequest({
         id: record.record_id,
-        expected_revision: record.revision,
-        data: record.data,
+        title: record.data.title,
         archived: value,
+      }),
+    );
+  }
+  async function applyArchive() {
+    if (!archiveRequest) return;
+    const request = archiveRequest;
+    const epoch = generation.current;
+    setArchiveRequest(null);
+    await run(async () => {
+      await call("archive_tree", {
+        id: request.id,
+        archived: request.archived,
       });
+      if (epoch !== generation.current) return;
       setSelected(undefined);
+      setActiveGroup(null);
       setHistory([]);
       await refresh();
     });
   }
+
   const groups = groupsFor(entries, savedGroups);
   const tree = entryTree(groups, entries, query, kind, archive);
   const visibleCount = (nodes: typeof tree): number =>
@@ -633,6 +679,21 @@ export default function App() {
           context(e);
       }}
     >
+      {archiveRequest && status.unlocked && (
+        <ArchiveDialog
+          request={archiveRequest}
+          counts={archiveSelection(
+            archiveRequest.id,
+            groups,
+            entries,
+            archiveRequest.archived,
+          )}
+          onCancel={() => setArchiveRequest(null)}
+          onConfirm={() => {
+            void applyArchive();
+          }}
+        />
+      )}
       {menu && <ContextMenu {...menu} close={() => setMenu(null)} />}
       {status.unlocked && pendingAction && (
         <ConfirmNewEntry
@@ -658,7 +719,6 @@ export default function App() {
             Neruvalo<small>YOUR PRIVATE SPACE</small>
           </div>
         </div>
-        <div className="stage">PROTOTYPE · 0.2</div>
         {status.unlocked && (
           <>
             <button
@@ -715,13 +775,6 @@ export default function App() {
             ))}
           </>
         )}
-        <button
-          className={page === "settings" ? "nav active" : "nav"}
-          onClick={() => setPage(page === "settings" ? "vault" : "settings")}
-        >
-          <Icon name="settings" />
-          <span>{t("Настройки")}</span>
-        </button>
         <div className="sidebar-foot">
           <span className="shield">◇</span>
           <p>
@@ -731,6 +784,20 @@ export default function App() {
           </p>
           <small>{t("Только тестовые данные")}</small>
         </div>
+        <button
+          className={page === "settings" ? "nav active" : "nav"}
+          onClick={() => setPage(page === "settings" ? "vault" : "settings")}
+        >
+          <Icon name="settings" />
+          <span>{t("Настройки")}</span>
+        </button>
+        <button
+          className={page === "about" ? "nav active" : "nav"}
+          onClick={() => setPage(page === "about" ? "vault" : "about")}
+        >
+          <Icon name="info" />
+          <span>{t("О программе")}</span>
+        </button>
       </aside>
       <main>
         <header>
@@ -782,7 +849,9 @@ export default function App() {
               {t(notice)}
             </div>
           )}
-          {page === "settings" ? (
+          {page === "about" ? (
+            <About />
+          ) : page === "settings" ? (
             <Settings
               login={status.unlocked ? status.login : undefined}
               server={activeServer}
@@ -1143,7 +1212,7 @@ export default function App() {
                   {groupDraft ? (
                     <GroupEditor
                       draft={groupDraft}
-                      groups={groups}
+                      groups={groups.filter((g) => !g.archived)}
                       onChange={setGroupDraft}
                       onSave={() => {
                         void saveGroup();
@@ -1166,37 +1235,16 @@ export default function App() {
                           {t("Отмена")}
                         </button>
                       </div>
-                      <div
-                        className="type-picker"
-                        role="group"
-                        aria-label={t("Тип")}
-                      >
-                        {Object.entries(types).map(([key, type]) => (
-                          <button
-                            key={key}
-                            className={
-                              draft.record_type === key
-                                ? "type-choice active"
-                                : "type-choice"
-                            }
-                            aria-pressed={draft.record_type === key}
-                            disabled={!!selected}
-                            onClick={() => {
-                              if (draft.record_type !== key)
-                                requestLeave(() => {
-                                  setDraft({
-                                    ...empty(key),
-                                    folder: draft.folder,
-                                  });
-                                  setCustomName("");
-                                });
-                            }}
-                          >
-                            <Icon name={key} />
-                            <span>{t(type.label)}</span>
-                          </button>
-                        ))}
-                      </div>
+                      <TypePicker
+                        value={draft.record_type}
+                        disabled={!!selected}
+                        onChange={(key) =>
+                          requestLeave(() => {
+                            setDraft({ ...empty(key), folder: draft.folder });
+                            setCustomName("");
+                          })
+                        }
+                      />
                       <label>
                         {t("Название")}
                         <input
@@ -1345,11 +1393,13 @@ export default function App() {
                             }
                           >
                             <option value="">{t("Корень списка")}</option>
-                            {groups.map((g) => (
-                              <option key={g.id} value={g.id}>
-                                {groupLabel(g.id, groups)}
-                              </option>
-                            ))}
+                            {groups
+                              .filter((g) => !g.archived)
+                              .map((g) => (
+                                <option key={g.id} value={g.id}>
+                                  {groupLabel(g.id, groups)}
+                                </option>
+                              ))}
                           </select>
                         </label>
                         <label>
@@ -1513,7 +1563,12 @@ export default function App() {
                             <HistoryVersion
                               key={v.version_id}
                               entry={v}
-                              disabled={busy || !status.online || needsSync}
+                              disabled={
+                                busy ||
+                                !status.online ||
+                                needsSync ||
+                                selected.archived
+                              }
                               onRestore={() => {
                                 void run(async () => {
                                   await call("save", {
@@ -1544,7 +1599,12 @@ export default function App() {
                       <div className="actions">
                         <button
                           className="primary"
-                          disabled={busy || !status.online || needsSync}
+                          disabled={
+                            busy ||
+                            !status.online ||
+                            needsSync ||
+                            !!selectedGroup.archived
+                          }
                           onClick={() =>
                             beginNew(kind || "login", selectedGroup.id)
                           }
@@ -1553,10 +1613,27 @@ export default function App() {
                         </button>
                         <button
                           className="secondary"
-                          disabled={busy || !status.online || needsSync}
+                          disabled={
+                            busy ||
+                            !status.online ||
+                            needsSync ||
+                            !!selectedGroup.archived
+                          }
                           onClick={() => beginGroup(selectedGroup.id)}
                         >
                           {t("Создать подгруппу")}
+                        </button>
+                        <button
+                          disabled={busy || !status.online || needsSync}
+                          onClick={() =>
+                            setArchiveRequest({
+                              id: selectedGroup.id,
+                              title: selectedGroup.title,
+                              archived: !archive,
+                            })
+                          }
+                        >
+                          {t(archive ? "Вернуть из архива" : "В архив")}
                         </button>
                       </div>
                     </div>

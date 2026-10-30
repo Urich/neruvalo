@@ -653,18 +653,29 @@ impl Client {
             .fetch_optional(&a.cache)
             .await?
         {
-            let pending: SaveRecord = serde_json::from_str(&row.get::<String, _>("value"))?;
+            let pending: Value = serde_json::from_str(&row.get::<String, _>("value"))?;
             let check = http
                 .get(format!(
                     "{}/api/v1/operations/{}",
-                    a.profile.server, pending.operation_id
+                    a.profile.server,
+                    pending["operation_id"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("INVALID_PENDING_OPERATION"))?
                 ))
                 .bearer_auth(a.token.as_str())
                 .send()
                 .await?;
             if check.status() == reqwest::StatusCode::NOT_FOUND {
                 let replay = http
-                    .post(format!("{}/api/v1/records/save", a.profile.server))
+                    .post(format!(
+                        "{}/api/v1/records/{}",
+                        a.profile.server,
+                        if pending.get("records").is_some() {
+                            "batch"
+                        } else {
+                            "save"
+                        }
+                    ))
                     .bearer_auth(a.token.as_str())
                     .json(&pending)
                     .send()
@@ -673,7 +684,13 @@ impl Client {
                     bail!("SAVE_RESULT_UNKNOWN");
                 }
                 if !replay.status().is_success() {
-                    let _: Value = response(replay).await?;
+                    if replay.status().is_client_error() {
+                        sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
+                            .execute(&a.cache)
+                            .await?;
+                    } else {
+                        let _: Value = response(replay).await?;
+                    }
                 }
             } else {
                 let _: Value = response(check).await?;
@@ -778,6 +795,20 @@ impl Client {
     ) -> Result<Value> {
         data.validate()?;
         self.validate_group_link(id.as_deref(), &data).await?;
+        let structure_snapshot = if data.record_type == "group"
+            || data.extra.contains_key("group_id")
+            || !data.folder.is_empty()
+        {
+            Some(
+                self.objects()
+                    .await?
+                    .into_iter()
+                    .map(|r| (r.record_id, r.revision))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+        } else {
+            None
+        };
         let http = self.http.clone();
         let a = self.unlocked()?;
         ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
@@ -833,14 +864,37 @@ impl Client {
             &a.profile.account_id,
             &r,
         ));
-        set_meta(&a.cache, "pending_operation", &serde_json::to_string(&r)?).await?;
+        let grouped = structure_snapshot.is_some();
+        let request = if let Some(snapshot) = structure_snapshot {
+            serde_json::to_value(neruvalo_protocol::SaveBatch {
+                operation_id: r.operation_id.clone(),
+                snapshot,
+                records: vec![r],
+            })?
+        } else {
+            serde_json::to_value(r)?
+        };
+        set_meta(
+            &a.cache,
+            "pending_operation",
+            &serde_json::to_string(&request)?,
+        )
+        .await?;
         let result = http
-            .post(format!("{}/api/v1/records/save", a.profile.server))
+            .post(format!(
+                "{}/api/v1/records/{}",
+                a.profile.server,
+                if grouped { "batch" } else { "save" }
+            ))
             .bearer_auth(a.token.as_str())
-            .json(&r)
+            .json(&request)
             .send()
             .await;
         let result: Value = match result {
+            Ok(resp) if resp.status().is_server_error() => {
+                a.online = false;
+                bail!("SAVE_RESULT_UNKNOWN");
+            }
             Ok(resp) => match response(resp).await {
                 Ok(v) => v,
                 Err(e) => {
@@ -862,7 +916,11 @@ impl Client {
             .execute(&a.cache)
             .await?;
         self.sync().await?;
-        Ok(result)
+        Ok(if grouped {
+            result["records"][0].clone()
+        } else {
+            result
+        })
     }
     pub async fn settings(&mut self, seconds: u32) -> Result<Value> {
         let http = self.http.clone();

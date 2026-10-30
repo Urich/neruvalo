@@ -278,7 +278,7 @@ describe("settings, language and folders", () => {
     ).not.toBeNull();
     await click(button("Заметка"));
     expect(document.querySelectorAll(".record")).toHaveLength(0);
-    expect(button("Banks")).toBeDefined();
+    expect(document.querySelector('[data-group-id="legacy:Banks"]')).toBeNull();
   });
 });
 describe("universal document editor", () => {
@@ -460,7 +460,10 @@ describe("nested groups in the main records list", () => {
       button("Добавить запись", document.querySelector(".detail-panel")!),
     );
     await click(
-      button("Банковская карта", document.querySelector(".type-picker")!),
+      document.querySelector<HTMLButtonElement>(".type-dropdown > button")!,
+    );
+    await click(
+      button("Банковская карта", document.querySelector(".type-dropdown")!),
     );
     await click(button("Продолжить"));
     await change(
@@ -598,5 +601,50 @@ describe("stale status response after lock", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("archive confirmation and About", () => {
+  it("targets the right-clicked group and cancels without a write", async () => {
+    await mount();
+    await login();
+    const row = document.querySelector<HTMLElement>(
+      '[data-group-id="legacy:Banks"]',
+    )!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          clientX: 20,
+          clientY: 20,
+        }),
+      );
+    });
+    await click(button("В архив", document.querySelector('[role="menu"]')!));
+    expect(document.querySelector("dialog")?.textContent).toContain("Banks");
+    expect(document.querySelector("dialog")?.textContent).toContain(
+      "Записи: 1",
+    );
+    await click(button("Отмена", document.querySelector("dialog")!));
+    expect(
+      native.invoke.mock.calls.some(
+        ([, a]) => a.request.action === "archive_tree",
+      ),
+    ).toBe(false);
+  });
+  it("shows license and version before login without contacting the server", async () => {
+    await mount();
+    await click(button("О программе"));
+    expect(document.querySelector(".about-panel")?.textContent).toContain(
+      "0.3.0",
+    );
+    expect(document.querySelector(".about-panel")?.textContent).toContain(
+      "GNU AFFERO GENERAL PUBLIC LICENSE",
+    );
+    expect(
+      native.invoke.mock.calls.some(([, a]) =>
+        ["login", "sync", "open_project_link"].includes(a.request.action),
+      ),
+    ).toBe(false);
   });
 });

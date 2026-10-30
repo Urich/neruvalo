@@ -92,6 +92,13 @@ async fn command(
                 }
                 Ok(serde_json::to_value(profiles)?)
             }
+            "open_project_link" => {
+                open_project_link(&text(r, "target")?, r["commit"].as_str())?;
+                Ok(Value::Null)
+            }
+            "about" => Ok(
+                serde_json::json!({"version":env!("CARGO_PKG_VERSION"), "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":1,"record_format":1,"group_format":2}),
+            ),
             "status" => Ok(c.status()),
             "touch" => {
                 c.touch()?;
@@ -130,6 +137,15 @@ async fn command(
                 c.unlock_offline(&text(r, "id")?, password).await
             }
             "sync" => c.sync().await,
+            "archive_tree" => {
+                c.archive_tree(
+                    &text(r, "id")?,
+                    r["archived"]
+                        .as_bool()
+                        .ok_or_else(|| anyhow!("Missing archive state"))?,
+                )
+                .await
+            }
             "groups" => Ok(serde_json::to_value(c.groups().await?)?),
             "create_group" => {
                 c.create_group(text(r, "title")?, r["parent"].as_str())
@@ -294,4 +310,30 @@ fn main() {
         .invoke_handler(tauri::generate_handler![command])
         .run(tauri::generate_context!())
         .expect("Failed to start Neruvalo");
+}
+
+#[cfg(feature = "desktop")]
+fn open_project_link(target: &str, commit: Option<&str>) -> anyhow::Result<()> {
+    let commit = commit.filter(|c| c.len() == 40 && c.bytes().all(|b| b.is_ascii_hexdigit()));
+    let url = match target {
+        "issues" => "https://github.com/Urich/neruvalo/issues".to_owned(),
+        "source" => format!(
+            "https://github.com/Urich/neruvalo/tree/{}",
+            commit.ok_or_else(|| anyhow::anyhow!("Missing build commit"))?
+        ),
+        "security" => format!(
+            "https://github.com/Urich/neruvalo/blob/{}/SECURITY.md",
+            commit.ok_or_else(|| anyhow::anyhow!("Missing build commit"))?
+        ),
+        _ => anyhow::bail!("Invalid project link"),
+    };
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()?;
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(&url).spawn()?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    std::process::Command::new("xdg-open").arg(&url).spawn()?;
+    Ok(())
 }

@@ -1,5 +1,11 @@
 import { ReactNode } from "react";
 const paths: Record<string, ReactNode> = {
+  info: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v6M12 7v1" />
+    </>
+  ),
   login: (
     <>
       <circle cx="8" cy="8" r="5" />

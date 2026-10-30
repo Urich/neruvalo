@@ -43,6 +43,7 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -97,7 +98,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path prototype-package | Out-Null
           Copy-Item target/debug/neruvalo-desktop.exe,target/debug/neruvalo-server.exe,target/debug/neruvalo-cli.exe prototype-package
-          Copy-Item installer/start-dev-server.cmd,docs/prototype.ru.md prototype-package
+          Copy-Item installer/start-dev-server.cmd,docs/prototype.ru.md,LICENSE,SECURITY.md prototype-package
+          Copy-Item apps/desktop/src/licenses/components.json prototype-package/THIRD-PARTY-NOTICES.json
+          git archive --format=zip --output=prototype-package/source.zip HEAD
       - uses: actions/upload-artifact@v4
         with:
           name: neruvalo-windows-prototype

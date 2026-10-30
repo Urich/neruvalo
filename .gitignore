@@ -33,3 +33,4 @@ Thumbs.db
 # Tauri generated schemas and recovery certificates
 /apps/desktop/src-tauri/gen/
 *-recovery.json
+/apps/desktop/src/licenses/components.json

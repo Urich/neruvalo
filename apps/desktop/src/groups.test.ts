@@ -4,6 +4,7 @@ import {
   entryTree,
   parentOf,
   groupLabel,
+  archiveSelection,
   Group,
   TreeNode,
 } from "./groups";
@@ -45,7 +46,7 @@ describe("encrypted group tree projection", () => {
     ).toEqual(["cards", "note"]);
     expect(keys(tree)).toContain("empty");
     const filtered = entryTree(groups, entries, "", "note", false);
-    expect(keys(filtered)).toEqual(["bank", "cards", "note", "empty"]);
+    expect(keys(filtered)).toEqual(["bank", "note"]);
     expect(keys(entryTree(groups, entries, "card", "", false))).toEqual([
       "bank",
       "cards",
@@ -84,5 +85,43 @@ describe("encrypted group tree projection", () => {
       false,
     );
     expect(keys(tree).sort()).toEqual(["a", "b", "c", "orphan"]);
+  });
+});
+
+describe("archive views", () => {
+  it("keeps active ancestors as context in the archive and hides empty groups for a type filter", () => {
+    const groups: Group[] = [
+      { id: "root", title: "Root", parent_id: null, archived: false },
+      { id: "old", title: "Old", parent_id: "root", archived: true },
+      { id: "empty", title: "Empty", parent_id: "root", archived: true },
+    ];
+    const active = record("active", "note", "root");
+    const old = { ...record("card", "bank_card", "old"), archived: true };
+    expect(keys(entryTree(groups, [active, old], "", "", false))).toEqual([
+      "root",
+      "active",
+    ]);
+    expect(keys(entryTree(groups, [active, old], "", "", true))).toEqual([
+      "root",
+      "empty",
+      "old",
+      "card",
+    ]);
+    expect(
+      keys(entryTree(groups, [active, old], "", "bank_card", true)),
+    ).toEqual(["root", "old", "card"]);
+    expect(
+      keys(entryTree(groups, [active, old], "Root", "note", true)),
+    ).toEqual([]);
+    expect(archiveSelection("root", groups, [active, old], true)).toEqual({
+      records: 1,
+      groups: 1,
+      unchanged: 1,
+    });
+    expect(archiveSelection("card", groups, [active, old], false)).toEqual({
+      records: 1,
+      groups: 1,
+      unchanged: 0,
+    });
   });
 });

@@ -44,3 +44,7 @@ The secret-derived identifier prevents a server-side dictionary search over comm
 New clients read existing format-1 entries and encrypted caches; the server needs no SQL migration or new HTTP endpoint to transport groups. The software versions are bumped to 0.2.0. Format-2 group support requires updated clients on devices using this vault. Version-0.1 clients do not understand these objects; forward compatibility of their UI with a vault containing groups is not promised. This is separate from preserving old data and the unchanged v1 protocol/SQL schema.
 
 The end-to-end suite covers empty/nested groups, multi-device reuse of legacy ancestors, unchanged old history and fields, offline read-only behavior, lock rejection, and the absence of group names/legacy paths from server-side version bodies. It runs against SQLite and PostgreSQL in CI.
+
+## Changes in 0.3.0
+
+Archived groups are returned by the client as well as active groups, with an `archived` boolean. See [archive-protocol.md](archive-protocol.md) for atomic subtree updates, ancestor restoration and compatibility.

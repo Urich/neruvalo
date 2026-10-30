@@ -978,3 +978,14 @@ kbd {
     max-width: 100%;
   }
 }
+.type-dropdown {position:relative;margin-block:16px;}
+.type-dropdown button {display:flex;align-items:center;gap:10px;width:100%;text-align:start;}
+.type-options {position:absolute;inset-inline:0;top:100%;z-index:30;background:#fff;border:1px solid #cbd5d0;border-radius:10px;padding:8px;max-height:320px;overflow:auto;box-shadow:0 8px 30px #0002;}
+.type-options button[aria-selected="true"] {background:#dcece5;color:#173d2e;}
+.about-license {white-space:pre-wrap;max-height:400px;overflow:auto;}
+.sidebar-foot {padding-block:24px 18px;}
+.about-panel {max-width:1000px;margin-inline:auto;overflow-wrap:anywhere;}
+.about-panel details {padding:12px 0;border-bottom:1px solid #d8dfd4;}
+.about-panel summary {cursor:pointer;font-weight:600;}
+.about-panel dd {margin:8px 0 16px;}
+.about-panel .about-license {font-size:12px;line-height:1.5;direction:ltr;text-align:left;padding:12px;background:#f2f5ef;}

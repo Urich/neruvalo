@@ -175,6 +175,7 @@ pub async fn application(url: &str, outbox: PathBuf) -> anyhow::Result<Router> {
         .route("/api/v1/session/close", post(logout))
         .route("/api/v1/snapshot", get(snapshot))
         .route("/api/v1/records/save", post(save_record))
+        .route("/api/v1/records/batch", post(save_batch))
         .route("/api/v1/records/{id}/history", get(history))
         .route("/api/v1/settings", put(settings))
         .route("/api/v1/operations/{id}", get(operation_result))
@@ -500,13 +501,9 @@ async fn operation_result(
         .ok_or(ApiError(StatusCode::NOT_FOUND, "OPERATION_NOT_FOUND"))?;
     Ok(Json(decode(&row.get::<String, _>("result"))?))
 }
-async fn save_record(
-    State(s): State<Arc<AppState>>,
-    h: HeaderMap,
-    Json(r): Json<SaveRecord>,
-) -> Api<Value> {
-    let actor = account(&s, &h).await?;
+async fn validate_save(s: &AppState, actor: &str, r: &SaveRecord) -> Result<(), ApiError> {
     if r.expected_revision < 0
+        || r.expected_revision == i64::MAX
         || Uuid::parse_str(&r.record_id).is_err()
         || Uuid::parse_str(&r.version_id).is_err()
         || Uuid::parse_str(&r.operation_id).is_err()
@@ -514,44 +511,37 @@ async fn save_record(
         return Err(invalid());
     }
     let row = sqlx::query("SELECT bundle FROM accounts WHERE id=$1")
-        .bind(&actor)
+        .bind(actor)
         .fetch_one(&s.pool)
         .await?;
     let bundle: AccountBundle = decode(&row.get::<String, _>("bundle"))?;
     crypto::verify(
         &bundle.public_sign,
-        &record_transcript(&s.server_id, &actor, &r),
+        &record_transcript(&s.server_id, actor, r),
         &r.signature,
     )
     .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "INVALID_SIGNATURE"))?;
-    let request_hash = crypto::digest(&ser(&r)?);
-    let mut tx = s.pool.begin().await?;
-    if let Some(row) =
-        sqlx::query("SELECT request_hash,result FROM operations WHERE account=$1 AND id=$2")
-            .bind(&actor)
-            .bind(&r.operation_id)
-            .fetch_optional(&mut *tx)
-            .await?
-    {
-        if row.get::<String, _>("request_hash") != request_hash {
-            return Err(ApiError(StatusCode::CONFLICT, "OPERATION_ID_REUSED"));
-        }
-        return Ok(Json(decode(&row.get::<String, _>("result"))?));
-    }
+    Ok(())
+}
+async fn apply_save(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    actor: &str,
+    r: &SaveRecord,
+) -> Result<Value, ApiError> {
     let revision = r.expected_revision + 1;
     if r.expected_revision == 0 {
         if r.previous_version.is_some() {
             return Err(invalid());
         }
-        let rows=sqlx::query("INSERT INTO records(id,account,revision,version_id,archived) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING").bind(&r.record_id).bind(&actor).bind(revision).bind(&r.version_id).bind(r.archived as i64).execute(&mut *tx).await?.rows_affected();
+        let rows=sqlx::query("INSERT INTO records(id,account,revision,version_id,archived) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING").bind(&r.record_id).bind(actor).bind(revision).bind(&r.version_id).bind(r.archived as i64).execute(&mut **tx).await?.rows_affected();
         if rows != 1 {
             return Err(conflict());
         }
     } else {
         let row = sqlx::query("SELECT revision,version_id FROM records WHERE id=$1 AND account=$2")
             .bind(&r.record_id)
-            .bind(&actor)
-            .fetch_optional(&mut *tx)
+            .bind(actor)
+            .fetch_optional(&mut **tx)
             .await?
             .ok_or(ApiError(StatusCode::FORBIDDEN, "ACCESS_DENIED"))?;
         if row.get::<i64, _>("revision") != r.expected_revision
@@ -559,7 +549,7 @@ async fn save_record(
         {
             return Err(conflict());
         }
-        let rows=sqlx::query("UPDATE records SET revision=$1,version_id=$2,archived=$3 WHERE id=$4 AND account=$5 AND revision=$6").bind(revision).bind(&r.version_id).bind(r.archived as i64).bind(&r.record_id).bind(&actor).bind(r.expected_revision).execute(&mut *tx).await?.rows_affected();
+        let rows=sqlx::query("UPDATE records SET revision=$1,version_id=$2,archived=$3 WHERE id=$4 AND account=$5 AND revision=$6").bind(revision).bind(&r.version_id).bind(r.archived as i64).bind(&r.record_id).bind(actor).bind(r.expected_revision).execute(&mut **tx).await?.rows_affected();
         if rows != 1 {
             return Err(conflict());
         }
@@ -570,8 +560,8 @@ async fn save_record(
         version_id: r.version_id.clone(),
         revision,
         previous_version: r.previous_version.clone(),
-        payload: r.payload,
-        signature: r.signature,
+        payload: r.payload.clone(),
+        signature: r.signature.clone(),
         archived: r.archived,
         created_at: now(),
     };
@@ -580,12 +570,108 @@ async fn save_record(
         .bind(&v.record_id)
         .bind(revision)
         .bind(ser(&v)?)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     let result = json!({"operation_id":r.operation_id,"record_id":v.record_id,"version_id":v.version_id,"revision":revision});
+    Ok(result)
+}
+async fn save_record(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Json(r): Json<SaveRecord>,
+) -> Api<Value> {
+    let actor = account(&s, &h).await?;
+    validate_save(&s, &actor, &r).await?;
+    commit_records(
+        &s,
+        &actor,
+        &r.operation_id,
+        &ser(&r)?,
+        None,
+        std::slice::from_ref(&r),
+    )
+    .await
+}
+async fn save_batch(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Json(r): Json<SaveBatch>,
+) -> Api<Value> {
+    let actor = account(&s, &h).await?;
+    if Uuid::parse_str(&r.operation_id).is_err() || r.records.is_empty() || r.records.len() > 10000
+    {
+        return Err(invalid());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for record in &r.records {
+        if !ids.insert(&record.record_id) || record.operation_id != r.operation_id {
+            return Err(invalid());
+        }
+        validate_save(&s, &actor, record).await?;
+    }
+    commit_records(
+        &s,
+        &actor,
+        &r.operation_id,
+        &ser(&r)?,
+        Some(&r.snapshot),
+        &r.records,
+    )
+    .await
+}
+async fn commit_records(
+    s: &AppState,
+    actor: &str,
+    operation: &str,
+    raw: &str,
+    snapshot: Option<&std::collections::BTreeMap<String, i64>>,
+    records: &[SaveRecord],
+) -> Api<Value> {
+    let request_hash = crypto::digest(raw);
+    let mut tx = s.pool.begin().await?;
+    // Serialize every write for this account, including older single-record clients.
+    // A write first also prevents SQLite read-to-write upgrade races.
+    sqlx::query("UPDATE accounts SET id=id WHERE id=$1")
+        .bind(actor)
+        .execute(&mut *tx)
+        .await?;
+    if let Some(row) =
+        sqlx::query("SELECT request_hash,result FROM operations WHERE account=$1 AND id=$2")
+            .bind(actor)
+            .bind(operation)
+            .fetch_optional(&mut *tx)
+            .await?
+    {
+        if row.get::<String, _>("request_hash") != request_hash {
+            return Err(ApiError(StatusCode::CONFLICT, "OPERATION_ID_REUSED"));
+        }
+        return Ok(Json(decode(&row.get::<String, _>("result"))?));
+    }
+    if let Some(expected) = snapshot {
+        let rows = sqlx::query("SELECT id,revision FROM records WHERE account=$1")
+            .bind(actor)
+            .fetch_all(&mut *tx)
+            .await?;
+        let actual: std::collections::BTreeMap<String, i64> = rows
+            .into_iter()
+            .map(|r| (r.get("id"), r.get("revision")))
+            .collect();
+        if &actual != expected {
+            return Err(conflict());
+        }
+    }
+    let mut results = Vec::new();
+    for record in records {
+        results.push(apply_save(&mut tx, actor, record).await?);
+    }
+    let result = if snapshot.is_none() {
+        results.remove(0)
+    } else {
+        json!({"operation_id":operation,"records":results})
+    };
     sqlx::query("INSERT INTO operations(account,id,request_hash,result) VALUES($1,$2,$3,$4)")
-        .bind(&actor)
-        .bind(&r.operation_id)
+        .bind(actor)
+        .bind(operation)
         .bind(request_hash)
         .bind(ser(&result)?)
         .execute(&mut *tx)

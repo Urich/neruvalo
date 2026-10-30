@@ -6,6 +6,7 @@ export type Group = {
   parent_id: string | null;
   legacy_path?: string | null;
   revision?: number;
+  archived?: boolean;
 };
 export function groupsFor(entries: Entry[], saved: Group[]): Group[] {
   const groups = saved.map((g) => ({ ...g }));
@@ -24,6 +25,13 @@ export function groupsFor(entries: Entry[], saved: Group[]): Group[] {
         title: path.split("/").at(-1) || path,
         parent_id: parent ? (legacy.get(parent) ?? null) : null,
         legacy_path: path,
+        archived: entries
+          .filter(
+            (e) =>
+              e.data.group_id === undefined &&
+              (e.data.folder === path || e.data.folder.startsWith(path + "/")),
+          )
+          .every((e) => e.archived),
       });
     }
   const byId = new Map(groups.map((g) => [g.id, g]));
@@ -103,6 +111,12 @@ export function entryTree(
             ...(node.entry?.data.tags ?? []),
           ].some((s) => s.toLocaleLowerCase().includes(q));
         const children = filter(node.children, match);
+        if (
+          node.group &&
+          !children.length &&
+          (kind || !!node.group.archived !== archive)
+        )
+          return [];
         return match || children.length ? [{ ...node, children }] : [];
       })
       .sort(
@@ -113,4 +127,44 @@ export function entryTree(
           ),
       );
   return filter(roots);
+}
+
+export function archiveSelection(
+  id: string,
+  groups: Group[],
+  entries: Entry[],
+  archived: boolean,
+) {
+  const ids = new Set([id]);
+  for (let pass = 0; pass <= groups.length; pass++) {
+    const before = ids.size;
+    for (const g of groups)
+      if (g.parent_id && ids.has(g.parent_id)) ids.add(g.id);
+    if (ids.size === before) break;
+  }
+  const records = entries.filter(
+    (e) => ids.has(e.record_id) || ids.has(parentOf(e.data, groups) ?? ""),
+  );
+  const parents = new Set<string>();
+  if (!archived) {
+    for (const item of [
+      ...groups.filter((g) => ids.has(g.id)).map((g) => g.parent_id),
+      ...records.map((e) => parentOf(e.data, groups)),
+    ]) {
+      let p = item;
+      const seen = new Set<string>();
+      while (p && !seen.has(p)) {
+        seen.add(p);
+        parents.add(p);
+        p = groups.find((g) => g.id === p)?.parent_id ?? null;
+      }
+    }
+  }
+  return {
+    records: records.filter((e) => e.archived !== archived).length,
+    groups: groups.filter(
+      (g) => (ids.has(g.id) || parents.has(g.id)) && !!g.archived !== archived,
+    ).length,
+    unchanged: records.filter((e) => e.archived === archived).length,
+  };
 }

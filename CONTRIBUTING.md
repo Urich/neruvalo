@@ -10,4 +10,4 @@ The project is currently in its prototype stage. Start with [the specification](
 - Build and test instructions are in [the prototype guide](docs/prototype.ru.md).
 - Commit implementation work to a feature branch. Do not commit to or merge into `main` unless Urich explicitly requests it.
 
-Current phase: documentation and design only. After accepting version 0.2.0 on 2026-10-29, Urich paused code changes, builds, packaging and CI until another explicit implementation request. Record the next iteration in the specification and use `[skip ci]` for documentation commits.
+Current phase: implementation and builds resumed by Urich on 2026-10-30. Work on `prototype/desktop-core`; keep `main` unchanged.

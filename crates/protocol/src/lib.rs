@@ -167,3 +167,11 @@ pub fn canonical_json(v: &Value) -> String {
         _ => serde_json::to_string(v).expect("JSON scalar"),
     }
 }
+
+/// Atomic update of an encrypted subtree. Snapshot contains opaque IDs only.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SaveBatch {
+    pub operation_id: String,
+    pub snapshot: std::collections::BTreeMap<String, i64>,
+    pub records: Vec<SaveRecord>,
+}
