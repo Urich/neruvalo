@@ -164,7 +164,22 @@ fn advance_guard(state: &Value, previous: &Value) -> Result<Value> {
     for item in state["incoming"].as_array().expect("validated array") {
         let c: SharedCopy = serde_json::from_value(item["copy"].clone())?;
         let digest = crypto::digest(&crypto::b64(c.transcript()));
+        let binding = crypto::digest(&serde_json::to_string(&(
+            c.format_version,
+            &c.server_id,
+            &c.owner_id,
+            &c.recipient_id,
+            &c.record_id,
+            &c.share_id,
+            &c.copy_id,
+            &c.owner_sign,
+            &c.recipient_share,
+        ))?);
         if let Some(old) = previous.get(&c.copy_id) {
+            ensure!(
+                old["binding"].as_str() == Some(binding.as_str()),
+                "SHARED_COPY_IDENTITY_CHANGED"
+            );
             ensure!(old["active"].as_bool() == Some(true), "REVOKED_SHARED_COPY");
             ensure!(
                 c.copy_revision >= old["revision"].as_i64().unwrap_or(0),
@@ -177,7 +192,8 @@ fn advance_guard(state: &Value, previous: &Value) -> Result<Value> {
                 );
             }
         }
-        next[&c.copy_id] = json!({"active":true,"revision":c.copy_revision,"digest":digest});
+        next[&c.copy_id] =
+            json!({"active":true,"revision":c.copy_revision,"digest":digest,"binding":binding});
     }
     Ok(next)
 }
@@ -447,6 +463,13 @@ mod tests {
         reissued["copy"]["copy_id"] = json!("new-copy-id");
         reissued["copy"]["share_id"] = json!("new-share-id");
         assert!(advance_guard(&json!({"incoming":[reissued]}), &removed).is_ok());
+        let mut impersonated = state.clone();
+        impersonated["incoming"][0]["copy"]["owner_id"] = json!("another-owner");
+        impersonated["incoming"][0]["copy"]["copy_revision"] = json!(4);
+        assert!(advance_guard(&impersonated, &first)
+            .unwrap_err()
+            .to_string()
+            .contains("SHARED_COPY_IDENTITY_CHANGED"));
         let mut fork = state.clone();
         fork["incoming"][0]["copy"]["key_box"] = json!("another-container");
         assert!(advance_guard(&fork, &first)
