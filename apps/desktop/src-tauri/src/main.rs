@@ -68,6 +68,24 @@ async fn command(
         let mut c = state.client.lock().await;
         if matches!(
             action.as_str(),
+            "touch"
+                | "sync"
+                | "list"
+                | "groups"
+                | "create_group"
+                | "save"
+                | "history"
+                | "copy_field"
+                | "sharing"
+                | "resolve_recipient"
+                | "share_change"
+                | "settings"
+        ) {
+            let status = c.status();
+            launch::check_profile(r["expected_profile"].as_str(), status["profile"].as_str())?;
+        }
+        if matches!(
+            action.as_str(),
             "login" | "register_begin" | "register_finish"
         ) {
             launch::check_server(state.pinned_server.as_deref(), &text(r, "server")?)?;
@@ -96,6 +114,8 @@ async fn command(
                 open_project_link(&text(r, "target")?, r["commit"].as_str())?;
                 Ok(Value::Null)
             }
+            "proxy_settings" => c.proxy_settings(),
+            "set_proxy" => c.set_proxy(serde_json::from_value(r["settings"].clone())?),
             "about" => Ok(
                 serde_json::json!({"version":env!("CARGO_PKG_VERSION"), "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":2,"record_format":1,"group_format":2}),
             ),
@@ -305,6 +325,27 @@ fn main() {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     let state = handle.state::<Desktop>();
                     let mut c = state.client.lock().await;
+                    if matches!(
+                        action.as_str(),
+                        "touch"
+                            | "sync"
+                            | "list"
+                            | "groups"
+                            | "create_group"
+                            | "save"
+                            | "history"
+                            | "copy_field"
+                            | "sharing"
+                            | "resolve_recipient"
+                            | "share_change"
+                            | "settings"
+                    ) {
+                        let status = c.status();
+                        launch::check_profile(
+                            r["expected_profile"].as_str(),
+                            status["profile"].as_str(),
+                        )?;
+                    }
                     let unlocked = c.status()["unlocked"].as_bool().unwrap_or(false);
                     if was_unlocked && !unlocked {
                         let _ = handle.emit("vault-locked", ());

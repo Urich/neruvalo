@@ -133,6 +133,8 @@ export function filterEntries(
 }
 export function errorText(error: unknown): string {
   const s = error instanceof Error ? error.message : String(error);
+  if (s.includes("INVALID_PROXY_CONFIG"))
+    return "Не удалось сохранить настройки прокси. Проверьте адрес и тип прокси.";
   if (s.includes("SHARING_VERSION_MISMATCH"))
     return "Общий доступ изменён. Синхронизируйте устройства и повторите действие.";
   if (s.includes("ALREADY_SHARED"))

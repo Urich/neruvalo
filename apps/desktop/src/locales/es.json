@@ -259,5 +259,19 @@
   "Общий доступ изменён. Синхронизируйте устройства и повторите действие.": "El acceso compartido ha cambiado. Sincronice sus dispositivos e inténtelo de nuevo.",
   "Доступ этому пользователю уже предоставлен.": "Este usuario ya tiene acceso.",
   "Пользователь не найден.": "Usuario no encontrado.",
-  "Нельзя поделиться записью с самим собой.": "No puede compartir una entrada consigo mismo."
+  "Нельзя поделиться записью с самим собой.": "No puede compartir una entrada consigo mismo.",
+  "Прокси": "Proxy",
+  "Настройки сохраняются только на этом устройстве и не отправляются серверу.": "La configuración se guarda solo en este dispositivo y no se envía al servidor.",
+  "Подключение к серверу": "Conexión al servidor",
+  "Автоматически": "Automático",
+  "Без прокси": "Sin proxy",
+  "Указать прокси": "Proxy manual",
+  "Адрес прокси": "Dirección del proxy",
+  "Логин прокси": "Usuario del proxy",
+  "Пароль прокси": "Contraseña del proxy",
+  "В Windows настройки и пароль прокси защищены DPAPI текущего пользователя.": "En Windows, DPAPI del usuario actual protege la configuración y la contraseña del proxy.",
+  "Сохранить прокси": "Guardar proxy",
+  "Настройки прокси сохранены. Они применятся к следующим запросам.": "Configuración del proxy guardada. Se aplicará a las próximas solicitudes.",
+  "Не удалось загрузить настройки прокси.": "No se pudo cargar la configuración del proxy.",
+  "Не удалось сохранить настройки прокси. Проверьте адрес и тип прокси.": "No se pudo guardar la configuración. Compruebe la dirección y el tipo de proxy."
 }

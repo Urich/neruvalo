@@ -259,5 +259,19 @@
   "Общий доступ изменён. Синхронизируйте устройства и повторите действие.": "Sharing has changed. Synchronize your devices and try again.",
   "Доступ этому пользователю уже предоставлен.": "This user already has access.",
   "Пользователь не найден.": "User not found.",
-  "Нельзя поделиться записью с самим собой.": "You cannot share an entry with yourself."
+  "Нельзя поделиться записью с самим собой.": "You cannot share an entry with yourself.",
+  "Прокси": "Proxy",
+  "Настройки сохраняются только на этом устройстве и не отправляются серверу.": "Settings are saved only on this device and are not sent to the server.",
+  "Подключение к серверу": "Server connection",
+  "Автоматически": "Automatic",
+  "Без прокси": "No proxy",
+  "Указать прокси": "Manual proxy",
+  "Адрес прокси": "Proxy address",
+  "Логин прокси": "Proxy username",
+  "Пароль прокси": "Proxy password",
+  "В Windows настройки и пароль прокси защищены DPAPI текущего пользователя.": "On Windows, proxy settings and password are protected by the current user’s DPAPI.",
+  "Сохранить прокси": "Save proxy",
+  "Настройки прокси сохранены. Они применятся к следующим запросам.": "Proxy settings saved. They apply to subsequent requests.",
+  "Не удалось загрузить настройки прокси.": "Could not load proxy settings.",
+  "Не удалось сохранить настройки прокси. Проверьте адрес и тип прокси.": "Could not save proxy settings. Check the proxy address and type."
 }

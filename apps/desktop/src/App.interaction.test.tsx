@@ -132,6 +132,7 @@ beforeEach(() => {
       case "status":
         return {
           unlocked: native.unlocked,
+          profile: native.unlocked ? "test-profile" : undefined,
           online: native.online,
           login: "alice",
           server: native.activeServer,
@@ -139,6 +140,13 @@ beforeEach(() => {
         };
       case "list":
         return native.records;
+      case "proxy_settings":
+        return {
+          settings: { mode: "system", url: "", username: "", password: "" },
+          protected_credentials: true,
+        };
+      case "set_proxy":
+        return { saved: true };
       case "sharing":
         return { incoming: native.incoming, outgoing: native.outgoing };
       case "resolve_recipient":
@@ -801,5 +809,52 @@ describe("shared-copy interface", () => {
       ),
     ).toBe(true);
     expect(document.querySelector('[data-record-id="copy"]')).toBeNull();
+  });
+});
+
+describe("native account binding", () => {
+  it("binds vault reads and edits to the displayed profile", async () => {
+    await mount();
+    await login();
+    expect(
+      native.invoke.mock.calls.find(([, a]) => a.request.action === "list")?.[1]
+        .request.expected_profile,
+    ).toBe("test-profile");
+    await click(button("＋ Добавить запись"));
+    await change(
+      document.querySelector<HTMLInputElement>(".detail-panel input")!,
+      "Scoped entry",
+    );
+    await click(button("Зашифровать и сохранить"));
+    expect(
+      native.invoke.mock.calls.find(([, a]) => a.request.action === "save")?.[1]
+        .request.expected_profile,
+    ).toBe("test-profile");
+  });
+});
+
+describe("local proxy settings", () => {
+  it("saves a proxy before sign-in without updating any server settings", async () => {
+    await mount();
+    await click(button("Настройки"));
+    const section = document.querySelector(".proxy-settings")!;
+    await change(section.querySelector("select")!, "manual");
+    await change(
+      section.querySelector<HTMLInputElement>("input")!,
+      "socks5h://127.0.0.1:10808",
+    );
+    await click(button("Сохранить прокси", section));
+    expect(
+      native.invoke.mock.calls.find(
+        ([, a]) => a.request.action === "set_proxy",
+      )?.[1].request.settings,
+    ).toMatchObject({ mode: "manual", url: "socks5h://127.0.0.1:10808" });
+    expect(
+      native.invoke.mock.calls.some(([, a]) =>
+        ["settings", "login"].includes(a.request.action),
+      ),
+    ).toBe(false);
+    await click(button("Вернуться ко входу"));
+    expect(document.querySelector(".auth-card")).not.toBeNull();
   });
 });

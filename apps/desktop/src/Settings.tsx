@@ -1,3 +1,4 @@
+import { ProxySettings, ProxyResult, ProxyConfig } from "./ProxySettings";
 import { GeneratorSettings } from "./GeneratorSettings";
 import { GeneratorOptions } from "./passwordGenerator";
 import { useState } from "react";
@@ -24,7 +25,11 @@ export function Settings({
   onShortcuts,
   generator,
   onGenerator,
+  loadProxy,
+  saveProxy,
 }: {
+  loadProxy: () => Promise<ProxyResult>;
+  saveProxy: (value: ProxyConfig) => Promise<void>;
   generator: GeneratorOptions;
   onGenerator: (value: GeneratorOptions) => void;
   login?: string;
@@ -84,6 +89,7 @@ export function Settings({
           <p className="muted">{t("Настройка этого устройства")}</p>
         </>
       )}
+      <ProxySettings load={loadProxy} save={saveProxy} disabled={busy} />
       <GeneratorSettings value={generator} onChange={onGenerator} />
       <h2>{t("Интерфейс")}</h2>
       <label>

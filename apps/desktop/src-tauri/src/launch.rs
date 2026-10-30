@@ -124,3 +124,19 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+pub fn check_profile(expected: Option<&str>, active: Option<&str>) -> Result<()> {
+    ensure!(expected.is_some() && expected == active, "ACCOUNT_CHANGED");
+    Ok(())
+}
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    #[test]
+    fn queued_vault_request_cannot_cross_account_switch() {
+        assert!(check_profile(Some("profile-a"), Some("profile-a")).is_ok());
+        assert!(check_profile(Some("profile-a"), Some("profile-b")).is_err());
+        assert!(check_profile(None, Some("profile-b")).is_err());
+        assert!(check_profile(Some("profile-a"), None).is_err());
+    }
+}
