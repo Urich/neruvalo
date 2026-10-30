@@ -18,6 +18,7 @@ use std::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 mod groups;
+mod sharing;
 pub use groups::GroupView;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -235,11 +236,11 @@ async fn cache(dir: &Path, id: &str) -> Result<AnyPool> {
         .await?
     {
         ensure!(
-            row.get::<String, _>("value") == "1",
+            row.get::<String, _>("value") == "2",
             "UNSUPPORTED_LOCAL_SCHEMA"
         );
     } else {
-        sqlx::query("INSERT INTO meta(name,value) VALUES('schema_version','1')")
+        sqlx::query("INSERT INTO meta(name,value) VALUES('schema_version','2')")
             .execute(&pool)
             .await?;
     }
@@ -668,12 +669,14 @@ impl Client {
             if check.status() == reqwest::StatusCode::NOT_FOUND {
                 let replay = http
                     .post(format!(
-                        "{}/api/v1/records/{}",
+                        "{}/{}",
                         a.profile.server,
-                        if pending.get("records").is_some() {
-                            "batch"
+                        if pending.get("kind").is_some() {
+                            "api/v2/shares/change"
+                        } else if pending.get("records").is_some() {
+                            "api/v1/records/batch"
                         } else {
-                            "save"
+                            "api/v1/records/save"
                         }
                     ))
                     .bearer_auth(a.token.as_str())
@@ -721,7 +724,9 @@ impl Client {
         for v in &versions {
             verify_version(&a.profile, v)?;
         }
+        sharing::verify_snapshot(a, &snapshot["sharing"]).await?;
         let mut tx = a.cache.begin().await?;
+        sqlx::query("INSERT INTO meta(name,value) VALUES('sharing',$1) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(&snapshot["sharing"])?).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM versions")
             .execute(&mut *tx)
             .await?;
@@ -859,6 +864,7 @@ impl Client {
             signature: String::new(),
             archived,
         };
+        sharing::attach(a, &mut r, &data).await?;
         r.signature = a.keys.sign(&record_transcript(
             &a.profile.server_id,
             &a.profile.account_id,
@@ -901,7 +907,9 @@ impl Client {
                     sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
                         .execute(&a.cache)
                         .await?;
-                    if e.to_string() == "RECORD_VERSION_MISMATCH" {
+                    if ["RECORD_VERSION_MISMATCH", "SHARING_VERSION_MISMATCH"]
+                        .contains(&e.to_string().as_str())
+                    {
                         a.needs_sync = true;
                     }
                     return Err(e);

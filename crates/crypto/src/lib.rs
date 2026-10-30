@@ -5,12 +5,10 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
     XChaCha20Poly1305, XNonce,
 };
+use crypto_box::aead::{rand_core::RngCore, OsRng};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
-use opaque_ke::{
-    rand::{rngs::OsRng, RngCore},
-    CipherSuite,
-};
+use opaque_ke::CipherSuite;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -212,5 +210,63 @@ mod tests {
             *derive(&k, b"auth").unwrap(),
             *derive(&k, b"recovery").unwrap()
         );
+    }
+}
+
+pub fn seal_shared_key(public: &str, key: &[u8]) -> Result<String> {
+    let bytes: [u8; 32] = unb64(public)?
+        .try_into()
+        .map_err(|_| anyhow!("invalid recipient key"))?;
+    Ok(b64(crypto_box::PublicKey::from(bytes)
+        .seal(&mut OsRng, key)
+        .map_err(|_| anyhow!("sealed box failure"))?))
+}
+pub fn open_shared_key(keys: &AccountKeys, ciphertext: &str) -> Result<Zeroizing<Vec<u8>>> {
+    Ok(Zeroizing::new(
+        crypto_box::SecretKey::from(keys.share)
+            .unseal(&unb64(ciphertext)?)
+            .map_err(|_| anyhow!("sealed box failure"))?,
+    ))
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+    #[test]
+    fn sealed_keys_are_recipient_specific_and_aead_context_is_required() {
+        let alice = AccountKeys::generate();
+        let bob = AccountKeys::generate();
+        let key = random::<32>();
+        let wrapped = seal_shared_key(&alice.public_share(), &key).unwrap();
+        assert_eq!(
+            open_shared_key(&alice, &wrapped).unwrap().as_slice(),
+            key.as_slice()
+        );
+        assert!(open_shared_key(&bob, &wrapped).is_err());
+        let e = seal(
+            &key,
+            b"copy",
+            b"server/owner/recipient/record/share/copy/version",
+        )
+        .unwrap();
+        assert!(open(&key, &e, b"other recipient").is_err());
+    }
+}
+
+#[cfg(test)]
+mod shared_signature_vector {
+    use super::*;
+    #[test]
+    fn fixed_ed25519_shared_copy_signature_verifies() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../docs/test-vectors/shared-copy-v2.json"
+        ))
+        .unwrap();
+        verify(
+            vector["copy"]["owner_sign"].as_str().unwrap(),
+            vector["transcript_utf8"].as_str().unwrap().as_bytes(),
+            vector["copy"]["signature"].as_str().unwrap(),
+        )
+        .unwrap();
     }
 }

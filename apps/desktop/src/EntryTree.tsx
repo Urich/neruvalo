@@ -149,6 +149,15 @@ export function EntryTree({
               <span>
                 <strong>
                   <bdi>{node.group?.title ?? node.entry!.data.title}</bdi>
+                  {!!node.entry?.share_count && (
+                    <span
+                      className="shared-indicator"
+                      aria-label={t("С общим доступом")}
+                    >
+                      {" "}
+                      · <Icon name="share" /> {node.entry.share_count}
+                    </span>
+                  )}
                 </strong>
                 <small>
                   {node.group

@@ -321,6 +321,7 @@ impl Client {
                 signature: String::new(),
                 archived,
             };
+            sharing::attach(a, &mut save, &r.data).await?;
             save.signature = a.keys.sign(&record_transcript(
                 &a.profile.server_id,
                 &a.profile.account_id,

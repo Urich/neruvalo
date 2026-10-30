@@ -9,6 +9,11 @@ export type Data = {
   tags: string[];
 };
 export type Entry = {
+  received?: boolean;
+  owner_login?: string;
+  share_id?: string;
+  source_record_id?: string;
+  share_count?: number;
   record_id: string;
   version_id: string;
   revision: number;
@@ -128,6 +133,13 @@ export function filterEntries(
 }
 export function errorText(error: unknown): string {
   const s = error instanceof Error ? error.message : String(error);
+  if (s.includes("SHARING_VERSION_MISMATCH"))
+    return "Общий доступ изменён. Синхронизируйте устройства и повторите действие.";
+  if (s.includes("ALREADY_SHARED"))
+    return "Доступ этому пользователю уже предоставлен.";
+  if (s.includes("ACCOUNT_NOT_FOUND")) return "Пользователь не найден.";
+  if (s.includes("CANNOT_SHARE_WITH_SELF"))
+    return "Нельзя поделиться записью с самим собой.";
   if (s.includes("GROUP_NOT_FOUND"))
     return "Группа недоступна. Синхронизируйте устройства.";
   if (s.includes("INVALID_GROUP")) return "Недопустимая структура групп.";

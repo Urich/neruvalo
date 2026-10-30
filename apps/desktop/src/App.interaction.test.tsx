@@ -15,6 +15,8 @@ const native = vi.hoisted(() => ({
   servers: ["https://a.example", "https://b.example"],
   groups: [] as Group[],
   records: [] as Entry[],
+  incoming: [] as Entry[],
+  outgoing: [] as any[],
   activeServer: "https://a.example",
   lock: undefined as (() => void) | undefined,
 }));
@@ -107,6 +109,8 @@ beforeEach(() => {
   native.servers = ["https://a.example", "https://b.example"];
   native.records = structuredClone(entries);
   native.groups = [];
+  native.incoming = [];
+  native.outgoing = [];
   native.activeServer = "https://a.example";
   native.invoke.mockReset();
   native.listen.mockReset();
@@ -135,6 +139,27 @@ beforeEach(() => {
         };
       case "list":
         return native.records;
+      case "sharing":
+        return { incoming: native.incoming, outgoing: native.outgoing };
+      case "resolve_recipient":
+        return {
+          id: "bob-id",
+          login: r.login,
+          public_sign: "sign-key",
+          public_share: "share-key",
+          fingerprint: "verified-fingerprint",
+        };
+      case "share_change": {
+        if (r.kind === "create")
+          native.outgoing.push({
+            record_id: r.id,
+            recipient_login: r.target,
+            share_id: "grant-1",
+          });
+        else if (r.kind === "revoke") native.outgoing = [];
+        else native.incoming = [];
+        return { changed: true };
+      }
       case "groups":
         return native.groups;
       case "create_group": {
@@ -703,5 +728,78 @@ describe("password generation in the editor", () => {
     expect(
       native.invoke.mock.calls.some(([, a]) => a.request.action === "save"),
     ).toBe(false);
+  });
+});
+
+describe("shared-copy interface", () => {
+  it("requires recipient verification and confirmation, then filters outgoing originals", async () => {
+    await mount();
+    await login();
+    const row = document.querySelector<HTMLElement>('[data-record-id="One"]')!;
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    await click(button("Поделиться", document.querySelector('[role="menu"]')!));
+    await change(
+      document.querySelector<HTMLInputElement>(".share-dialog input")!,
+      "bob",
+    );
+    expect(
+      native.invoke.mock.calls.some(
+        ([, a]) => a.request.action === "share_change",
+      ),
+    ).toBe(false);
+    await click(button("Проверить получателя"));
+    expect(document.querySelector(".share-dialog")?.textContent).toContain(
+      "verified-fingerprint",
+    );
+    await click(button("Подтвердить передачу"));
+    expect(
+      native.invoke.mock.calls.some(
+        ([, a]) =>
+          a.request.action === "share_change" &&
+          a.request.kind === "create" &&
+          a.request.id === "One",
+      ),
+    ).toBe(true);
+    await click(button("Закрыть"));
+    await click(button("С общим доступом"));
+    expect(document.querySelector('[data-record-id="One"]')).not.toBeNull();
+    expect(document.querySelector('[data-record-id="Two"]')).toBeNull();
+    expect(document.querySelector('[data-group-id="legacy:Banks"]')).toBeNull();
+  });
+  it("received copies expose no editing, history or resharing and can be dismissed", async () => {
+    native.incoming = [
+      {
+        ...structuredClone(entries[0]),
+        record_id: "copy",
+        received: true,
+        owner_login: "owner",
+        share_id: "grant",
+        source_record_id: "original",
+      },
+    ];
+    await mount();
+    await login();
+    await click(button("Полученные"));
+    const row = document.querySelector<HTMLElement>('[data-record-id="copy"]')!;
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    const menu = document.querySelector('[role="menu"]')!;
+    expect(menu.textContent).not.toContain("Редактировать");
+    expect(menu.textContent).not.toContain("Поделиться");
+    expect(menu.textContent).not.toContain("История");
+    await click(button("Убрать у меня", menu));
+    await click(button("Подтвердить", document.querySelector("dialog")!));
+    expect(
+      native.invoke.mock.calls.some(
+        ([, a]) =>
+          a.request.action === "share_change" &&
+          a.request.kind === "dismiss" &&
+          a.request.id === "original",
+      ),
+    ).toBe(true);
+    expect(document.querySelector('[data-record-id="copy"]')).toBeNull();
   });
 });

@@ -2605,7 +2605,7 @@ dependencies = [
 
 [[package]]
 name = "neruvalo-client"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2627,7 +2627,7 @@ dependencies = [
 
 [[package]]
 name = "neruvalo-crypto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "neruvalo-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2661,7 +2661,7 @@ dependencies = [
 
 [[package]]
 name = "neruvalo-protocol"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2669,7 +2669,7 @@ dependencies = [
 
 [[package]]
 name = "neruvalo-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",

@@ -98,7 +98,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 async fn shell(c: &mut Client) -> Result<()> {
-    println!("Commands: list, new, show ID, history ID, archive ID, restore ID, sync, timeout SECONDS, quit.");
+    println!("Commands: list, new, show ID, history ID, archive ID, restore ID, sync, timeout SECONDS, received, show-received ID, share ID LOGIN, revoke ID SHARE, dismiss ID SHARE, quit.");
     loop {
         let line = input("neruvalo> ")?;
         let mut words = line.split_whitespace();
@@ -120,6 +120,39 @@ async fn shell(c: &mut Client) -> Result<()> {
                             r.data.title
                         );
                     }
+                }
+                "received" => {
+                    let state = c.sharing().await?;
+                    for entry in state["incoming"].as_array().into_iter().flatten() {
+                        println!(
+                            "{} {} ({})",
+                            entry["record_id"], entry["data"]["title"], entry["owner_login"]
+                        );
+                    }
+                }
+                "show-received" => {
+                    let state = c.sharing().await?;
+                    let entry = state["incoming"]
+                        .as_array()
+                        .and_then(|v| v.iter().find(|v| v["record_id"].as_str() == Some(id)))
+                        .ok_or_else(|| anyhow!("Not found"))?;
+                    println!("{}", serde_json::to_string_pretty(&entry["data"])?);
+                }
+                "share" | "revoke" | "dismiss" => {
+                    let target = words
+                        .next()
+                        .ok_or_else(|| anyhow!("Recipient login or share ID required"))?;
+                    c.share_change(
+                        if command == "share" {
+                            "create"
+                        } else {
+                            command
+                        },
+                        id,
+                        target,
+                    )
+                    .await?;
+                    println!("Access changed.");
                 }
                 "new" => {
                     let title = input("Title: ")?;
@@ -152,10 +185,7 @@ async fn shell(c: &mut Client) -> Result<()> {
                     }
                 }
                 "archive" | "restore" => {
-                    let mut list = c.history(id).await?;
-                    let r = list.remove(0);
-                    c.save(Some(id.into()), r.revision, r.data, command == "archive")
-                        .await?;
+                    c.archive_tree(id, command == "archive").await?;
                 }
                 "sync" => {
                     c.sync().await?;

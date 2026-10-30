@@ -1,5 +1,13 @@
 import { ReactNode } from "react";
 const paths: Record<string, ReactNode> = {
+  share: (
+    <>
+      <circle cx="5" cy="12" r="3" />
+      <circle cx="19" cy="5" r="3" />
+      <circle cx="19" cy="19" r="3" />
+      <path d="m8 11 8-5M8 13l8 5" />
+    </>
+  ),
   info: (
     <>
       <circle cx="12" cy="12" r="9" />

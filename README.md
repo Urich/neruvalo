@@ -44,3 +44,5 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Never co
 ## License
 
 GNU Affero General Public License version 3 only (`AGPL-3.0-only`). See [LICENSE](LICENSE).
+
+Implementation status and remaining specification work: [docs/implementation-status.ru.md](docs/implementation-status.ru.md). Prototype 0.4.0 uses protocol/database schema 2; use fresh test data and the packaged `start-desktop.cmd` for a separate cache.

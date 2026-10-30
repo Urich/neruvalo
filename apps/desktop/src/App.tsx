@@ -9,6 +9,8 @@ import { ArchiveDialog } from "./ArchiveDialog";
 import { About } from "./About";
 import { TypePicker } from "./TypePicker";
 import { generatePassword, normalizeGenerator } from "./passwordGenerator";
+import { DismissShare } from "./DismissShare";
+import { ShareDialog, Recipient } from "./ShareDialog";
 import { Settings } from "./Settings";
 import { ContextMenu, MenuItem } from "./ContextMenu";
 import {
@@ -89,6 +91,13 @@ export default function App() {
   const [ticket, setTicket] = useState("");
   const [certReady, setCertReady] = useState(false);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [shareView, setShareView] = useState<"own" | "outgoing" | "received">(
+    "own",
+  );
+  const [received, setReceived] = useState<Entry[]>([]);
+  const [outgoing, setOutgoing] = useState<any[]>([]);
+  const [dismissTarget, setDismissTarget] = useState<Entry | null>(null);
+  const [shareTarget, setShareTarget] = useState<Entry | null>(null);
   const [selected, setSelected] = useState<Entry>();
   const [draft, setDraft] = useState<Data>();
   const [pendingNew, setPendingNew] = useState<{
@@ -121,6 +130,11 @@ export default function App() {
     generation.current++;
     setStatus({ unlocked: false });
     setEntries([]);
+    setReceived([]);
+    setOutgoing([]);
+    setShareTarget(null);
+    setDismissTarget(null);
+    setShareView("own");
     setSelected(undefined);
     setDraft(undefined);
     setPendingNew(null);
@@ -154,6 +168,7 @@ export default function App() {
       setError(errorText(e));
       if (
         String(e).includes("RECORD_VERSION_MISMATCH") ||
+        String(e).includes("SHARING_VERSION_MISMATCH") ||
         String(e).includes("SYNCHRONIZATION_REQUIRED")
       )
         setNeedsSync(true);
@@ -169,15 +184,44 @@ export default function App() {
       clear();
       return;
     }
-    const [list, groups] = await Promise.all([
+    const [list, groups, sharing] = await Promise.all([
       call<Entry[]>("list"),
       call<Group[]>("groups"),
+      call("sharing"),
     ]);
     if (epoch !== generation.current) return;
     wasUnlocked.current = true;
     setStatus(s);
     setTimeoutSeconds(s.timeout_seconds ?? 60);
-    setEntries(list);
+    const owned = list.map((e) => ({
+      ...e,
+      share_count: (sharing?.outgoing ?? []).filter(
+        (g: any) => g.record_id === e.record_id,
+      ).length,
+    }));
+    setEntries(owned);
+    setReceived((previous) => {
+      const next = sharing?.incoming ?? [];
+      if (
+        next.some(
+          (e: Entry) => !previous.some((old) => old.record_id === e.record_id),
+        )
+      )
+        setNotice("Вам предоставлен доступ к новой записи.");
+      return next;
+    });
+    setOutgoing(sharing?.outgoing ?? []);
+    if (sharing?.notifications?.length)
+      setNotice("Вам предоставлен доступ к новой записи.");
+    setSelected((current) =>
+      current?.received
+        ? (sharing?.incoming ?? []).find(
+            (e: Entry) => e.record_id === current.record_id,
+          )
+        : current
+          ? owned.find((e) => e.record_id === current.record_id)
+          : current,
+    );
     setSavedGroups(groups ?? []);
   }
   useEffect(() => {
@@ -399,7 +443,9 @@ export default function App() {
       }
       const row = recordRow;
       const entry = row
-        ? entries.find((e) => e.record_id === row.dataset.recordId)
+        ? [...entries, ...received].find(
+            (e) => e.record_id === row.dataset.recordId,
+          )
         : target.closest(".detail-panel") && !draft
           ? selected
           : undefined;
@@ -423,6 +469,26 @@ export default function App() {
         if (fieldsOf(record.data).some((f) => f[0] === "password"))
           items.push(copyItem("password", t("Скопировать пароль")));
         if (field) items.push(copyItem(field, t("Копировать поле")));
+        if (record.received) {
+          items.push(
+            {
+              label: t("Открыть"),
+              action: safe(() => requestLeave(() => open(record))),
+            },
+            {
+              label: t("Убрать у меня"),
+              disabled: busy || !status.online || needsSync,
+              action: safe(() => requestLeave(() => setDismissTarget(record))),
+            },
+          );
+          setMenu({ x, y, items });
+          return;
+        }
+        items.push({
+          label: t("Поделиться"),
+          disabled: busy || !status.online || needsSync || record.archived,
+          action: safe(() => requestLeave(() => setShareTarget(record))),
+        });
         items.push(
           {
             label: t("Открыть"),
@@ -481,6 +547,7 @@ export default function App() {
     });
   }
   function beginGroup(parent: string | null = activeGroup) {
+    setShareView("own");
     if (groups.find((g) => g.id === parent)?.archived) parent = null;
     setSelected(undefined);
     setDraft(undefined);
@@ -517,6 +584,7 @@ export default function App() {
     setRevealed({});
   }
   function beginNew(recordType: string, parent: string | null = activeGroup) {
+    setShareView("own");
     if (groups.find((g) => g.id === parent)?.archived) parent = null;
     setGroupDraft(null);
     setDraftGroup(parent);
@@ -653,7 +721,16 @@ export default function App() {
   }
 
   const groups = groupsFor(entries, savedGroups);
-  const tree = entryTree(groups, entries, query, kind, archive);
+  const tree = entryTree(
+    shareView === "received" ? [] : groups,
+    shareView === "received"
+      ? received
+      : entries.filter((e) => shareView !== "outgoing" || !!e.share_count),
+    query,
+    kind,
+    shareView === "received" ? false : archive,
+    shareView === "outgoing",
+  );
   const visibleCount = (nodes: typeof tree): number =>
     nodes.reduce(
       (count, node) =>
@@ -661,7 +738,9 @@ export default function App() {
       0,
     );
   const selectedGroup =
-    groups.find((g) => g.id === activeGroup) ??
+    (shareView !== "received"
+      ? groups.find((g) => g.id === activeGroup)
+      : undefined) ??
     groups.find(
       (g) =>
         activeGroup?.startsWith("legacy:") &&
@@ -698,6 +777,53 @@ export default function App() {
           }}
         />
       )}
+      {shareTarget && status.unlocked && (
+        <ShareDialog
+          title={shareTarget.data.title}
+          wallet={shareTarget.data.record_type === "crypto_wallet"}
+          recipients={outgoing.filter(
+            (g) => g.record_id === shareTarget.record_id,
+          )}
+          disabled={busy || !status.online || needsSync}
+          onClose={() => setShareTarget(null)}
+          onResolve={(login) => call<Recipient>("resolve_recipient", { login })}
+          onCreate={async (login) => {
+            await call("share_change", {
+              kind: "create",
+              id: shareTarget.record_id,
+              target: login,
+            });
+            await refresh();
+          }}
+          onRevoke={async (id) => {
+            await call("share_change", {
+              kind: "revoke",
+              id: shareTarget.record_id,
+              target: id,
+            });
+            await refresh();
+          }}
+        />
+      )}
+      {dismissTarget && status.unlocked && (
+        <DismissShare
+          title={dismissTarget.data.title}
+          onCancel={() => setDismissTarget(null)}
+          onConfirm={() => {
+            const item = dismissTarget;
+            setDismissTarget(null);
+            void run(async () => {
+              await call("share_change", {
+                kind: "dismiss",
+                id: item.source_record_id,
+                target: item.share_id,
+              });
+              setSelected(undefined);
+              await refresh();
+            });
+          }}
+        />
+      )}
       {menu && <ContextMenu {...menu} close={() => setMenu(null)} />}
       {status.unlocked && pendingAction && (
         <ConfirmNewEntry
@@ -726,11 +852,12 @@ export default function App() {
         {status.unlocked && (
           <>
             <button
-              className={!archive ? "nav active" : "nav"}
+              className={!archive && shareView === "own" ? "nav active" : "nav"}
               onClick={() => {
                 requestLeave(() => {
                   setPage("vault");
                   setArchive(false);
+                  setShareView("own");
                   setActiveGroup(null);
                   setGroupDraft(null);
                   setKind("");
@@ -748,6 +875,7 @@ export default function App() {
                 requestLeave(() => {
                   setPage("vault");
                   setArchive(true);
+                  setShareView("own");
                   setGroupDraft(null);
                   setSelected(undefined);
                   setDraft(undefined);
@@ -756,6 +884,37 @@ export default function App() {
             >
               <Icon name="archive" /> <span>{t("Архив")}</span>
             </button>
+            {(["outgoing", "received"] as const).map((view) => (
+              <button
+                key={view}
+                aria-label={t(
+                  view === "outgoing" ? "С общим доступом" : "Полученные",
+                )}
+                className={shareView === view ? "nav active" : "nav"}
+                onClick={() =>
+                  requestLeave(() => {
+                    setShareView(view);
+                    setArchive(false);
+                    setPage("vault");
+                    setSelected(undefined);
+                    setActiveGroup(null);
+                    setKind("");
+                    setQuery("");
+                    setGroupDraft(null);
+                  })
+                }
+              >
+                <Icon name="share" />
+                <span>
+                  {t(view === "outgoing" ? "С общим доступом" : "Полученные")}
+                </span>
+                <b>
+                  {view === "received"
+                    ? received.length
+                    : entries.filter((e) => e.share_count).length}
+                </b>
+              </button>
+            ))}
             <div className="nav-gap" />
             {Object.entries(types).map(([key]) => (
               <button
@@ -1584,36 +1743,67 @@ export default function App() {
                           </span>
                         ))}
                       </div>
-                      <div className="actions">
+                      {selected.received && (
+                        <p className="muted">
+                          {t("Владелец")}: <bdi>{selected.owner_login}</bdi> ·{" "}
+                          {t("Только чтение")}
+                        </p>
+                      )}
+                      {!selected.received ? (
+                        <div className="actions">
+                          <button
+                            className="secondary"
+                            disabled={
+                              busy ||
+                              !status.online ||
+                              needsSync ||
+                              selected.archived
+                            }
+                            onClick={() => setShareTarget(selected)}
+                          >
+                            {t("Поделиться")}
+                            {selected.share_count
+                              ? ` (${selected.share_count})`
+                              : ""}
+                          </button>
+                          <button
+                            className="secondary"
+                            disabled={
+                              busy || !status.online || needsSync || archive
+                            }
+                            onClick={() => (
+                              setDraftGroup(parentOf(selected.data, groups)),
+                              setDraft(structuredClone(selected.data))
+                            )}
+                          >
+                            {t("Редактировать")}
+                          </button>
+                          <button
+                            className="subtle"
+                            onClick={() => {
+                              void loadHistory(selected);
+                            }}
+                          >
+                            {t("История")}
+                          </button>
+                          <button
+                            className="subtle"
+                            disabled={busy || !status.online || needsSync}
+                            onClick={() => setArchived(!archive)}
+                          >
+                            {archive ? t("Вернуть из архива") : t("В архив")}
+                          </button>
+                        </div>
+                      ) : (
                         <button
                           className="secondary"
-                          disabled={
-                            busy || !status.online || needsSync || archive
-                          }
-                          onClick={() => (
-                            setDraftGroup(parentOf(selected.data, groups)),
-                            setDraft(structuredClone(selected.data))
-                          )}
-                        >
-                          {t("Редактировать")}
-                        </button>
-                        <button
-                          className="subtle"
-                          onClick={() => {
-                            void loadHistory(selected);
-                          }}
-                        >
-                          {t("История")}
-                        </button>
-                        <button
-                          className="subtle"
                           disabled={busy || !status.online || needsSync}
-                          onClick={() => setArchived(!archive)}
+                          onClick={() => setDismissTarget(selected)}
                         >
-                          {archive ? t("Вернуть из архива") : t("В архив")}
+                          {t("Убрать у меня")}
                         </button>
-                      </div>
-                      {history.length > 0 && (
+                      )}
+                      {!selected.received && history.length > 0 && (
                         <div className="history">
                           <h3>{t("История владельца")}</h3>
                           {history.map((v) => (

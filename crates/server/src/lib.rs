@@ -1,3 +1,4 @@
+mod sharing;
 use anyhow::{ensure, Context};
 use axum::{
     extract::{DefaultBodyLimit, Path, State},
@@ -115,26 +116,29 @@ pub async fn application(url: &str, outbox: PathBuf) -> anyhow::Result<Router> {
         .await?
     {
         ensure!(
-            row.get::<String, _>("value") == "1",
+            row.get::<String, _>("value") == "2",
             "Unsupported database schema"
         );
     }
     sqlx::raw_sql("CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY,login TEXT NOT NULL UNIQUE,email TEXT NOT NULL UNIQUE,registration TEXT NOT NULL,bundle TEXT NOT NULL,timeout_seconds BIGINT NOT NULL DEFAULT 60);
  CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,account TEXT NOT NULL REFERENCES accounts(id),expires BIGINT NOT NULL);
- CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,account TEXT NOT NULL REFERENCES accounts(id),revision BIGINT NOT NULL,version_id TEXT NOT NULL,archived BIGINT NOT NULL);
+ CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,account TEXT NOT NULL REFERENCES accounts(id),revision BIGINT NOT NULL,version_id TEXT NOT NULL,archived BIGINT NOT NULL,sharing_revision BIGINT NOT NULL DEFAULT 0);
  CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY,record_id TEXT NOT NULL REFERENCES records(id),revision BIGINT NOT NULL,body TEXT NOT NULL,UNIQUE(record_id,revision));
  CREATE TABLE IF NOT EXISTS operations(account TEXT NOT NULL REFERENCES accounts(id),id TEXT NOT NULL,request_hash TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(account,id));
+ CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY,copy_id TEXT NOT NULL UNIQUE,record_id TEXT NOT NULL REFERENCES records(id),owner TEXT NOT NULL REFERENCES accounts(id),recipient TEXT NOT NULL REFERENCES accounts(id),state TEXT NOT NULL,body TEXT NOT NULL);
+ CREATE INDEX IF NOT EXISTS shares_record ON shares(record_id);
+ CREATE INDEX IF NOT EXISTS shares_recipient ON shares(recipient);
  CREATE INDEX IF NOT EXISTS records_account ON records(account);") .execute(&pool).await?;
     let schema = sqlx::query("SELECT value FROM metadata WHERE name='schema_version'")
         .fetch_optional(&pool)
         .await?;
     if let Some(row) = schema {
         ensure!(
-            row.get::<String, _>("value") == "1",
+            row.get::<String, _>("value") == "2",
             "Unsupported database schema"
         );
     } else {
-        sqlx::query("INSERT INTO metadata(name,value) VALUES('schema_version','1')")
+        sqlx::query("INSERT INTO metadata(name,value) VALUES('schema_version','2')")
             .execute(&pool)
             .await?;
     }
@@ -174,6 +178,8 @@ pub async fn application(url: &str, outbox: PathBuf) -> anyhow::Result<Router> {
         .route("/api/v1/auth/finish", post(auth_finish))
         .route("/api/v1/session/close", post(logout))
         .route("/api/v1/snapshot", get(snapshot))
+        .route("/api/v2/accounts/{login}", get(sharing::resolve))
+        .route("/api/v2/shares/change", post(sharing::change))
         .route("/api/v1/records/save", post(save_record))
         .route("/api/v1/records/batch", post(save_batch))
         .route("/api/v1/records/{id}/history", get(history))
@@ -473,8 +479,9 @@ async fn logout(State(s): State<Arc<AppState>>, h: HeaderMap) -> Api<Value> {
 }
 async fn snapshot(State(s): State<Arc<AppState>>, h: HeaderMap) -> Api<Value> {
     let id = account(&s, &h).await?;
-    // A single query gives all versions and current archive state at one statement snapshot.
-    let rows=sqlx::query("SELECT v.body FROM versions v JOIN records r ON r.id=v.record_id WHERE r.account=$1 ORDER BY v.record_id,v.revision").bind(&id).fetch_all(&s.pool).await?;
+    let mut tx = s.pool.begin().await?;
+    sharing::guard(&mut tx).await?;
+    let rows=sqlx::query("SELECT v.body FROM versions v JOIN records r ON r.id=v.record_id WHERE r.account=$1 ORDER BY v.record_id,v.revision").bind(&id).fetch_all(&mut *tx).await?;
     let mut versions = Vec::new();
     for row in rows {
         let v: StoredVersion = decode(&row.get::<String, _>("body"))?;
@@ -482,10 +489,14 @@ async fn snapshot(State(s): State<Arc<AppState>>, h: HeaderMap) -> Api<Value> {
     }
     let timeout = sqlx::query("SELECT timeout_seconds FROM accounts WHERE id=$1")
         .bind(&id)
-        .fetch_one(&s.pool)
+        .fetch_one(&mut *tx)
         .await?
         .get::<i64, _>("timeout_seconds");
-    Ok(Json(json!({"versions":versions,"timeout_seconds":timeout})))
+    let shares = sharing::snapshot(&mut tx, &id).await?;
+    tx.commit().await?;
+    Ok(Json(
+        json!({"versions":versions,"timeout_seconds":timeout,"sharing":shares}),
+    ))
 }
 async fn operation_result(
     State(s): State<Arc<AppState>>,
@@ -554,6 +565,7 @@ async fn apply_save(
             return Err(conflict());
         }
     }
+    sharing::apply_updates(tx, actor, r).await?;
     let v = StoredVersion {
         operation_id: r.operation_id.clone(),
         record_id: r.record_id.clone(),
@@ -631,10 +643,7 @@ async fn commit_records(
     let mut tx = s.pool.begin().await?;
     // Serialize every write for this account, including older single-record clients.
     // A write first also prevents SQLite read-to-write upgrade races.
-    sqlx::query("UPDATE accounts SET id=id WHERE id=$1")
-        .bind(actor)
-        .execute(&mut *tx)
-        .await?;
+    sharing::guard(&mut tx).await?;
     if let Some(row) =
         sqlx::query("SELECT request_hash,result FROM operations WHERE account=$1 AND id=$2")
             .bind(actor)

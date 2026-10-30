@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const PROFILE: &str = "opaque-ristretto255-sha512-argon2id-m65536-t3-p1-v1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -175,3 +175,6 @@ pub struct SaveBatch {
     pub snapshot: std::collections::BTreeMap<String, i64>,
     pub records: Vec<SaveRecord>,
 }
+
+mod sharing;
+pub use sharing::*;

@@ -97,7 +97,7 @@ async fn command(
                 Ok(Value::Null)
             }
             "about" => Ok(
-                serde_json::json!({"version":env!("CARGO_PKG_VERSION"), "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":1,"record_format":1,"group_format":2}),
+                serde_json::json!({"version":env!("CARGO_PKG_VERSION"), "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":2,"record_format":1,"group_format":2}),
             ),
             "status" => Ok(c.status()),
             "touch" => {
@@ -145,6 +145,12 @@ async fn command(
                         .ok_or_else(|| anyhow!("Missing archive state"))?,
                 )
                 .await
+            }
+            "sharing" => c.sharing().await,
+            "resolve_recipient" => c.resolve_recipient(&text(r, "login")?).await,
+            "share_change" => {
+                c.share_change(&text(r, "kind")?, &text(r, "id")?, &text(r, "target")?)
+                    .await
             }
             "groups" => Ok(serde_json::to_value(c.groups().await?)?),
             "create_group" => {
@@ -224,11 +230,24 @@ async fn command(
             "copy_field" => {
                 let seconds = r["seconds"].as_u64().unwrap_or(30);
                 anyhow::ensure!(seconds <= 3600, "Invalid clipboard timeout");
-                let list = c.history(&text(r, "id")?).await?;
+                let received = c.sharing().await?;
+                let shared = received["incoming"]
+                    .as_array()
+                    .and_then(|v| v.iter().find(|v| v["record_id"] == r["id"]));
+                let list = if let Some(shared) = shared {
+                    vec![serde_json::from_value::<neruvalo_client::RecordData>(
+                        shared["data"].clone(),
+                    )?]
+                } else {
+                    c.history(&text(r, "id")?)
+                        .await?
+                        .into_iter()
+                        .map(|v| v.data)
+                        .collect()
+                };
                 let current = list.first().ok_or_else(|| anyhow!("Record not found"))?;
                 let value = Zeroizing::new(
                     current
-                        .data
                         .fields
                         .get(&text(r, "field")?)
                         .ok_or_else(|| anyhow!("Field not found"))?

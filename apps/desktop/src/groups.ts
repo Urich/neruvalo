@@ -80,6 +80,7 @@ export function entryTree(
   query: string,
   kind: string,
   archive: boolean,
+  hideEmpty = false,
 ): TreeNode[] {
   const q = query.trim().toLocaleLowerCase();
   const nodes = new Map<string, TreeNode>(
@@ -114,7 +115,7 @@ export function entryTree(
         if (
           node.group &&
           !children.length &&
-          (kind || !!node.group.archived !== archive)
+          (kind || hideEmpty || !!node.group.archived !== archive)
         )
           return [];
         return match || children.length ? [{ ...node, children }] : [];

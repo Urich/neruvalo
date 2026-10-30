@@ -600,3 +600,217 @@ async fn atomic_group_archive_restore_and_conflict() {
         .contains("OFFLINE_READ_ONLY"));
     handle.abort();
 }
+
+#[tokio::test]
+async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (server, handle) = start(root).await;
+    let mut owner = Client::new(root.join("owner")).unwrap();
+    register(&mut owner, &server, "owner", root).await;
+    owner.login(&server, "owner", password()).await.unwrap();
+    let mut bob = Client::new(root.join("bob")).unwrap();
+    register(&mut bob, &server, "bob", root).await;
+    bob.login(&server, "bob", password()).await.unwrap();
+    let mut carol = Client::new(root.join("carol")).unwrap();
+    register(&mut carol, &server, "carol", root).await;
+    carol.login(&server, "carol", password()).await.unwrap();
+    let group = owner
+        .create_group("PRIVATE-GROUP".into(), None)
+        .await
+        .unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut original = data("Mail", "old-secret");
+    original.tags = vec!["PRIVATE-TAG".into()];
+    original.notes = "shared notes".into();
+    original
+        .extra
+        .insert("private-metadata".into(), serde_json::json!("hidden"));
+    let id = owner
+        .save_in_group(None, 0, original, false, Some(&group))
+        .await
+        .unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    owner.share_change("create", &id, "bob").await.unwrap();
+    bob.sync().await.unwrap();
+    let received = bob.sharing().await.unwrap();
+    let copy_id = received["incoming"][0]["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let share_id = received["incoming"][0]["share_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(received["incoming"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        received["incoming"][0]["data"]["fields"]["password"],
+        "old-secret"
+    );
+    assert_eq!(received["incoming"][0]["data"]["notes"], "shared notes");
+    assert_eq!(
+        received["incoming"][0]["data"]["tags"],
+        serde_json::json!([])
+    );
+    assert!(!received.to_string().contains("PRIVATE-GROUP"));
+    assert!(!received.to_string().contains("PRIVATE-TAG"));
+    assert!(!received.to_string().contains("private-metadata"));
+    // Tampering must not advance the recipient cache or replace its verified copy.
+    let db_url = std::env::var("NERUVALO_TEST_DATABASE_URL").unwrap_or_else(|_| {
+        neruvalo_client::sqlite_database_url(&root.join("server.sqlite3")).unwrap()
+    });
+    let db = sqlx::AnyPool::connect(&db_url).await.unwrap();
+    let body = owner.sharing().await.unwrap()["outgoing"][0]["copy"].clone();
+    let mut corrupt = body.clone();
+    corrupt["source_revision"] = serde_json::json!(999);
+    sqlx::query("UPDATE shares SET body=$1 WHERE id=$2")
+        .bind(corrupt.to_string())
+        .bind(&share_id)
+        .execute(&db)
+        .await
+        .unwrap();
+    assert!(bob.sync().await.is_err());
+    assert_eq!(
+        bob.sharing().await.unwrap()["incoming"][0]["data"]["fields"]["password"],
+        "old-secret"
+    );
+    sqlx::query("UPDATE shares SET body=$1 WHERE id=$2")
+        .bind(body.to_string())
+        .bind(&share_id)
+        .execute(&db)
+        .await
+        .unwrap();
+    bob.sync().await.unwrap();
+    db.close().await;
+    assert!(bob.history(&id).await.unwrap().is_empty());
+    assert!(bob.history(&copy_id).await.unwrap().is_empty());
+    assert!(bob.share_change("create", &id, "carol").await.is_err());
+    assert!(bob
+        .save(Some(copy_id.clone()), 1, data("Attack", "x"), false)
+        .await
+        .is_err());
+    assert!(owner
+        .share_change("create", &id, "bob")
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("ALREADY_SHARED"));
+    owner.sync().await.unwrap();
+    owner.share_change("create", &id, "carol").await.unwrap();
+    let current = owner
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.record_id == id)
+        .unwrap();
+    let mut changed = current.data;
+    changed
+        .fields
+        .insert("password".into(), "new-secret".into());
+    owner
+        .save(Some(id.clone()), current.revision, changed, false)
+        .await
+        .unwrap();
+    bob.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    assert_eq!(
+        bob.sharing().await.unwrap()["incoming"][0]["data"]["fields"]["password"],
+        "new-secret"
+    );
+    assert_eq!(
+        bob.sharing().await.unwrap()["incoming"][0]["record_id"],
+        copy_id
+    );
+    assert_eq!(
+        carol.sharing().await.unwrap()["incoming"][0]["data"]["fields"]["password"],
+        "new-secret"
+    );
+    bob.share_change("dismiss", &id, &share_id).await.unwrap();
+    assert!(bob.sharing().await.unwrap()["incoming"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let stale = owner
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.record_id == id)
+        .unwrap();
+    assert!(owner
+        .save(Some(id.clone()), stale.revision, stale.data, false)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("SHARING_VERSION_MISMATCH"));
+    owner.sync().await.unwrap();
+    assert_eq!(
+        owner.sharing().await.unwrap()["outgoing"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let carol_share = owner.sharing().await.unwrap()["outgoing"][0]["share_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    owner
+        .share_change("revoke", &id, &carol_share)
+        .await
+        .unwrap();
+    // Until synchronization the recipient can still read the last granted copy offline.
+    assert_eq!(
+        carol.sharing().await.unwrap()["incoming"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    carol.sync().await.unwrap();
+    assert!(carol.sharing().await.unwrap()["incoming"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    owner.share_change("create", &id, "bob").await.unwrap();
+    bob.sync().await.unwrap();
+    assert_ne!(
+        bob.sharing().await.unwrap()["incoming"][0]["record_id"],
+        copy_id
+    );
+    owner.archive_tree(&group, true).await.unwrap();
+    bob.sync().await.unwrap();
+    assert!(bob.sharing().await.unwrap()["incoming"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    owner.archive_tree(&group, false).await.unwrap();
+    bob.sync().await.unwrap();
+    assert!(bob.sharing().await.unwrap()["incoming"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    owner.share_change("create", &id, "bob").await.unwrap();
+    bob.sync().await.unwrap();
+    let profile = bob.profiles().await.unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    bob.lock();
+    bob.unlock_offline(&profile, password()).await.unwrap();
+    assert_eq!(
+        bob.sharing().await.unwrap()["incoming"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(bob.share_change("dismiss", &id, "anything").await.is_err());
+    assert_eq!(owner.history(&id).await.unwrap().len(), 4);
+    handle.abort();
+}

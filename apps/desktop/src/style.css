@@ -1018,3 +1018,10 @@ kbd {
 .generator-option {display:flex;align-items:center;gap:10px;}
 .generator-option input[type="checkbox"] {width:18px;height:18px;margin:0;accent-color:#2b6149;}
 @media (max-width:700px) {.password-generator-field {flex-wrap:wrap;}.password-generator-field button {width:100%;}}
+.share-dialog {width:min(620px,90vw);max-height:85vh;overflow:auto;}
+.share-recipient {padding:12px 0;border-bottom:1px solid #dce6d4;overflow-wrap:anywhere;}
+.share-recipient code {font-size:11px;user-select:text;}
+.share-recipient button {margin:8px;}
+
+.shared-indicator {display:inline-flex;align-items:center;gap:3px;color:#315d45;font-size:11px;}
+.shared-indicator .icon {width:13px;height:13px;}
