@@ -325,27 +325,6 @@ fn main() {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     let state = handle.state::<Desktop>();
                     let mut c = state.client.lock().await;
-                    if matches!(
-                        action.as_str(),
-                        "touch"
-                            | "sync"
-                            | "list"
-                            | "groups"
-                            | "create_group"
-                            | "save"
-                            | "history"
-                            | "copy_field"
-                            | "sharing"
-                            | "resolve_recipient"
-                            | "share_change"
-                            | "settings"
-                    ) {
-                        let status = c.status();
-                        launch::check_profile(
-                            r["expected_profile"].as_str(),
-                            status["profile"].as_str(),
-                        )?;
-                    }
                     let unlocked = c.status()["unlocked"].as_bool().unwrap_or(false);
                     if was_unlocked && !unlocked {
                         let _ = handle.emit("vault-locked", ());
