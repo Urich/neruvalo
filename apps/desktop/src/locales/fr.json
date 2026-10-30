@@ -225,5 +225,7 @@
   "Сообщить об уязвимости": "Signaler une vulnérabilité",
   "Сторонние компоненты": "Composants tiers",
   "Включая инструменты сборки и зависимости поддерживаемых платформ.": "Comprend les outils de compilation et les dépendances des plateformes prises en charge.",
-  "Поиск компонентов": "Rechercher des composants"
+  "Поиск компонентов": "Rechercher des composants",
+  "Вернуться ко входу": "Retour à la connexion",
+  "Вернуться в хранилище": "Retour au coffre"
 }

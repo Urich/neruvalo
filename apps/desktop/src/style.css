@@ -1009,3 +1009,5 @@ kbd {
 .type-options button:hover:not(:disabled),
 .type-options button:focus-visible { background: #edf2e8; border-color: #dce6d4; }
 .type-options button[aria-selected="true"] { background: #dfe8d8; color: #28543f; }
+
+.page-back { margin-bottom: 20px; }

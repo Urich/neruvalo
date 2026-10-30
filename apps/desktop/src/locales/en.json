@@ -225,5 +225,7 @@
   "Сообщить об уязвимости": "Report a vulnerability",
   "Сторонние компоненты": "Third-party components",
   "Включая инструменты сборки и зависимости поддерживаемых платформ.": "Includes build tools and dependencies for supported platforms.",
-  "Поиск компонентов": "Search components"
+  "Поиск компонентов": "Search components",
+  "Вернуться ко входу": "Back to sign in",
+  "Вернуться в хранилище": "Back to vault"
 }

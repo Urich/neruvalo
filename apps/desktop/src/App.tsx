@@ -841,6 +841,11 @@ export default function App() {
           )}
         </header>
         <div className="content">
+          {page !== "vault" && (
+            <button type="button" className="secondary page-back" onClick={() => setPage("vault")}>
+              {t(status.unlocked ? "Вернуться в хранилище" : "Вернуться ко входу")}
+            </button>
+          )}
           {error && (
             <div className="banner error" role="alert">
               {t(error)}
