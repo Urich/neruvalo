@@ -14,6 +14,61 @@ async fn cached(a: &Unlocked) -> Result<Value> {
 fn content(data: &RecordData) -> Value {
     json!({"record_type":data.record_type,"schema_version":data.schema_version,"title":data.title,"fields":data.fields,"notes":data.notes})
 }
+fn verify_outgoing(a: &Unlocked, item: &Value) -> Result<SharedCopy> {
+    let c: SharedCopy = serde_json::from_value(item["copy"].clone())?;
+    ensure!(
+        c.owner_id == a.profile.account_id
+            && c.owner_sign == a.keys.public_sign()
+            && c.server_id == a.profile.server_id
+            && c.format_version == 2,
+        "INVALID_SHARED_COPY"
+    );
+    ensure!(
+        item["share_id"].as_str() == Some(&c.share_id)
+            && item["copy_id"].as_str() == Some(&c.copy_id)
+            && item["record_id"].as_str() == Some(&c.record_id)
+            && item["recipient_id"].as_str() == Some(&c.recipient_id)
+            && item["public_share"].as_str() == Some(&c.recipient_share),
+        "INVALID_SHARED_COPY"
+    );
+    crypto::verify(&a.keys.public_sign(), &c.transcript(), &c.signature)?;
+    Ok(c)
+}
+fn pin_named_identity(
+    pins: &mut BTreeMap<String, String>,
+    name: &str,
+    identity: &str,
+) -> Result<()> {
+    if let Some(old) = pins.get(name) {
+        ensure!(old == identity, "PUBLIC_KEY_MISMATCH");
+    }
+    pins.insert(name.into(), identity.into());
+    Ok(())
+}
+fn pin_recipient(
+    pins: &mut BTreeMap<String, String>,
+    login: &str,
+    recipient: &Value,
+) -> Result<()> {
+    ensure!(
+        recipient["login"].as_str() == Some(login),
+        "PUBLIC_KEY_MISMATCH"
+    );
+    let id = recipient["id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("INVALID_RECIPIENT"))?;
+    let pin = format!(
+        "{}:{}:{}",
+        id,
+        recipient["public_sign"]
+            .as_str()
+            .ok_or_else(|| anyhow!("INVALID_RECIPIENT"))?,
+        recipient["public_share"]
+            .as_str()
+            .ok_or_else(|| anyhow!("INVALID_RECIPIENT"))?
+    );
+    pin_named_identity(pins, login, &pin)
+}
 fn make_copy(a: &Unlocked, data: &RecordData, mut c: SharedCopy) -> Result<SharedCopy> {
     let key = Zeroizing::new(crypto::random::<32>());
     c.payload = serde_json::to_value(crypto::seal(
@@ -68,7 +123,7 @@ pub(super) async fn attach(a: &Unlocked, r: &mut SaveRecord, data: &RecordData) 
                 .iter()
                 .filter(|s| s["record_id"].as_str() == Some(&r.record_id))
             {
-                let mut c: SharedCopy = serde_json::from_value(item["copy"].clone())?;
+                let mut c = verify_outgoing(a, item)?;
                 c.source_version_id = r.version_id.clone();
                 c.source_revision = r.expected_revision + 1;
                 c.copy_revision += 1;
@@ -136,7 +191,15 @@ pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<Value
         Some(row) => serde_json::from_str(&row.get::<String, _>("value"))?,
         None => json!({}),
     };
-    let next_guard = advance_guard(state, &guard)?;
+    let incoming_guard = advance_guard(state, &guard["incoming"])?;
+    for item in state["outgoing"]
+        .as_array()
+        .ok_or_else(|| anyhow!("INVALID_SHARED_SNAPSHOT"))?
+    {
+        verify_outgoing(a, item)?;
+    }
+    let outgoing_guard = advance_guard(&json!({"incoming":state["outgoing"]}), &guard["outgoing"])?;
+    let next_guard = json!({"incoming":incoming_guard,"outgoing":outgoing_guard});
     let mut pins: BTreeMap<String, String> =
         match sqlx::query("SELECT value FROM meta WHERE name='share_pins'")
             .fetch_optional(&a.cache)
@@ -157,6 +220,15 @@ pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<Value
         if let Some(pin) = pins.get(&c.owner_id) {
             ensure!(pin == &c.owner_sign, "PUBLIC_KEY_MISMATCH");
         }
+        let owner_login = item["owner_login"]
+            .as_str()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| anyhow!("INVALID_SHARED_SNAPSHOT"))?;
+        pin_named_identity(
+            &mut pins,
+            &format!("login:{owner_login}"),
+            &format!("{}:{}", c.owner_id, c.owner_sign),
+        )?;
         pins.insert(c.owner_id.clone(), c.owner_sign.clone());
         read_copy(a, &c)?;
         if let Some(previous) = old["incoming"]
@@ -181,7 +253,7 @@ impl Client {
             for item in list {
                 let c: SharedCopy = serde_json::from_value(item["copy"].clone())?;
                 let data = read_copy(a, &c)?;
-                incoming.push(json!({"record_id":c.copy_id,"version_id":c.source_version_id,"revision":c.copy_revision,"archived":false,"data":data,"received":true,"owner_login":item["owner_login"],"share_id":c.share_id,"source_record_id":c.record_id,"sharing_revision":item["sharing_revision"],"source_revision":c.source_revision}));
+                incoming.push(json!({"record_id":format!("shared:{}",c.copy_id),"version_id":c.source_version_id,"revision":c.copy_revision,"archived":false,"data":data,"received":true,"owner_login":item["owner_login"],"share_id":c.share_id,"source_record_id":c.record_id,"sharing_revision":item["sharing_revision"],"source_revision":c.source_revision}));
             }
         }
         Ok(json!({"incoming":incoming,"outgoing":state["outgoing"]}))
@@ -216,18 +288,7 @@ impl Client {
                 Some(r) => serde_json::from_str(&r.get::<String, _>("value"))?,
                 None => BTreeMap::new(),
             };
-        let id = recipient["id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("INVALID_RECIPIENT"))?;
-        let pin = format!(
-            "{}:{}",
-            recipient["public_sign"].as_str().unwrap_or(""),
-            recipient["public_share"].as_str().unwrap_or("")
-        );
-        if let Some(old) = pins.get(id) {
-            ensure!(old == &pin, "PUBLIC_KEY_MISMATCH");
-        }
-        pins.insert(id.into(), pin);
+        pin_recipient(&mut pins, login, &recipient)?;
         set_meta(&a.cache, "recipient_pins", &serde_json::to_string(&pins)?).await?;
         Ok(recipient)
     }
@@ -395,5 +456,20 @@ mod tests {
         let mut older = state;
         older["incoming"][0]["copy"]["copy_revision"] = json!(1);
         assert!(advance_guard(&older, &first).is_err());
+    }
+    #[test]
+    fn recipient_pin_binds_the_login_to_identity_and_both_keys() {
+        let mut pins = BTreeMap::new();
+        let bob =
+            json!({"login":"bob","id":"account-B","public_sign":"sign-B","public_share":"share-B"});
+        pin_recipient(&mut pins, "bob", &bob).unwrap();
+        let mut changed = bob.clone();
+        changed["id"] = json!("attacker");
+        assert!(pin_recipient(&mut pins, "bob", &changed).is_err());
+        changed = bob.clone();
+        changed["public_share"] = json!("attacker-key");
+        assert!(pin_recipient(&mut pins, "bob", &changed).is_err());
+        assert!(pin_recipient(&mut pins, "another-login", &bob).is_err());
+        pin_recipient(&mut pins, "bob", &bob).unwrap();
     }
 }
