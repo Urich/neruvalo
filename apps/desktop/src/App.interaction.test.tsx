@@ -652,15 +652,56 @@ describe("archive confirmation and About", () => {
 describe("return from public screens", () => {
   it("returns from Settings and About to sign in without losing entered credentials", async () => {
     await mount();
-    await change(document.querySelector<HTMLInputElement>('input[autocomplete="username"]')!, 'draft_user');
-    await change(document.querySelector<HTMLInputElement>('input[type="password"]')!, 'unsent-password');
-    for (const page of ['Настройки','О программе']) {
+    await change(
+      document.querySelector<HTMLInputElement>(
+        'input[autocomplete="username"]',
+      )!,
+      "draft_user",
+    );
+    await change(
+      document.querySelector<HTMLInputElement>('input[type="password"]')!,
+      "unsent-password",
+    );
+    for (const page of ["Настройки", "О программе"]) {
       await click(button(page));
-      expect(document.querySelector('.auth-card')).toBeNull();
-      await click(button('Вернуться ко входу'));
-      expect(document.querySelector<HTMLInputElement>('input[autocomplete="username"]')?.value).toBe('draft_user');
-      expect(document.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe('unsent-password');
+      expect(document.querySelector(".auth-card")).toBeNull();
+      await click(button("Вернуться ко входу"));
+      expect(
+        document.querySelector<HTMLInputElement>(
+          'input[autocomplete="username"]',
+        )?.value,
+      ).toBe("draft_user");
+      expect(
+        document.querySelector<HTMLInputElement>('input[type="password"]')
+          ?.value,
+      ).toBe("unsent-password");
     }
-    expect(native.invoke.mock.calls.some(([,a]) => a.request.action === 'login')).toBe(false);
+    expect(
+      native.invoke.mock.calls.some(([, a]) => a.request.action === "login"),
+    ).toBe(false);
+  });
+});
+
+describe("password generation in the editor", () => {
+  it("uses device settings and never sends the generated password until save", async () => {
+    await mount();
+    await login();
+    await click(button("＋ Добавить запись"));
+    await click(button("Настройки"));
+    const settings = document.querySelector(".generator-settings")!;
+    await change(settings.querySelector("select")!, "32");
+    await click(button("Вернуться в хранилище"));
+    await click(button("Сгенерировать пароль"));
+    const password = [
+      ...document.querySelectorAll<HTMLInputElement>(".detail-panel input"),
+    ].find((i) => i.type === "password")!.value;
+    expect(password).toHaveLength(32);
+    expect(JSON.parse(localStorage.getItem("neruvalo.generator")!).length).toBe(
+      32,
+    );
+    expect(localStorage.getItem("neruvalo.generator")).not.toContain(password);
+    expect(
+      native.invoke.mock.calls.some(([, a]) => a.request.action === "save"),
+    ).toBe(false);
   });
 });

@@ -227,5 +227,15 @@
   "Включая инструменты сборки и зависимости поддерживаемых платформ.": "Einschließlich Build-Werkzeugen und Abhängigkeiten unterstützter Plattformen.",
   "Поиск компонентов": "Komponenten suchen",
   "Вернуться ко входу": "Zurück zur Anmeldung",
-  "Вернуться в хранилище": "Zurück zum Tresor"
+  "Вернуться в хранилище": "Zurück zum Tresor",
+  "Генератор паролей": "Passwortgenerator",
+  "Длина пароля": "Passwortlänge",
+  "Строчные буквы (a–z)": "Kleinbuchstaben (a–z)",
+  "Заглавные буквы (A–Z)": "Großbuchstaben (A–Z)",
+  "Цифры (0–9)": "Ziffern (0–9)",
+  "Специальные символы": "Sonderzeichen",
+  "Исключать похожие символы (I, l, 1, O, 0, o)": "Ähnliche Zeichen ausschließen (I, l, 1, O, 0, o)",
+  "Каждый выбранный набор символов обязательно используется. Пароль создаётся локально.": "Jeder gewählte Zeichensatz wird verwendet. Passwörter werden lokal erzeugt.",
+  "Сгенерировать пароль": "Passwort erzeugen",
+  "Не удалось сгенерировать пароль.": "Passwort konnte nicht erzeugt werden."
 }

@@ -8,6 +8,7 @@ import { Icon } from "./Icon";
 import { ArchiveDialog } from "./ArchiveDialog";
 import { About } from "./About";
 import { TypePicker } from "./TypePicker";
+import { generatePassword, normalizeGenerator } from "./passwordGenerator";
 import { Settings } from "./Settings";
 import { ContextMenu, MenuItem } from "./ContextMenu";
 import {
@@ -48,6 +49,9 @@ async function call<T = any>(
 }
 export default function App() {
   const { t, language } = useI18n();
+  const [generator, setGenerator] = useState(() =>
+    normalizeGenerator(readLocal("neruvalo.generator", null)),
+  );
   const [page, setPage] = useState<"vault" | "settings" | "about">("vault");
   const [treeReveal, setTreeReveal] = useState(0);
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
@@ -776,29 +780,29 @@ export default function App() {
           </>
         )}
         <div className="sidebar-bottom">
-        <button
-          className={page === "settings" ? "nav active" : "nav"}
-          onClick={() => setPage(page === "settings" ? "vault" : "settings")}
-        >
-          <Icon name="settings" />
-          <span>{t("Настройки")}</span>
-        </button>
-        <button
-          className={page === "about" ? "nav active" : "nav"}
-          onClick={() => setPage(page === "about" ? "vault" : "about")}
-        >
-          <Icon name="info" />
-          <span>{t("О программе")}</span>
-        </button>
-        <div className="sidebar-foot">
-          <span className="shield">◇</span>
-          <p>
-            {t("Ваши секреты шифруются")}
-            <br />
-            {t("на вашем устройстве.")}
-          </p>
-          <small>{t("Только тестовые данные")}</small>
-        </div>
+          <button
+            className={page === "settings" ? "nav active" : "nav"}
+            onClick={() => setPage(page === "settings" ? "vault" : "settings")}
+          >
+            <Icon name="settings" />
+            <span>{t("Настройки")}</span>
+          </button>
+          <button
+            className={page === "about" ? "nav active" : "nav"}
+            onClick={() => setPage(page === "about" ? "vault" : "about")}
+          >
+            <Icon name="info" />
+            <span>{t("О программе")}</span>
+          </button>
+          <div className="sidebar-foot">
+            <span className="shield">◇</span>
+            <p>
+              {t("Ваши секреты шифруются")}
+              <br />
+              {t("на вашем устройстве.")}
+            </p>
+            <small>{t("Только тестовые данные")}</small>
+          </div>
         </div>
       </aside>
       <main>
@@ -842,8 +846,16 @@ export default function App() {
         </header>
         <div className="content">
           {page !== "vault" && (
-            <button type="button" className="secondary page-back" onClick={() => setPage("vault")}>
-              {t(status.unlocked ? "Вернуться в хранилище" : "Вернуться ко входу")}
+            <button
+              type="button"
+              className="secondary page-back"
+              onClick={() => setPage("vault")}
+            >
+              {t(
+                status.unlocked
+                  ? "Вернуться в хранилище"
+                  : "Вернуться ко входу",
+              )}
             </button>
           )}
           {error && (
@@ -860,6 +872,11 @@ export default function App() {
             <About />
           ) : page === "settings" ? (
             <Settings
+              generator={generator}
+              onGenerator={(value) => {
+                setGenerator(value);
+                writeLocal("neruvalo.generator", value);
+              }}
               login={status.unlocked ? status.login : undefined}
               server={activeServer}
               online={status.online}
@@ -1333,20 +1350,53 @@ export default function App() {
                                 }
                               />
                             ) : (
-                              <input
-                                type={secret ? "password" : "text"}
-                                autoComplete="off"
-                                value={draft.fields[key] ?? ""}
-                                onChange={(e) =>
-                                  setDraft({
-                                    ...draft,
-                                    fields: {
-                                      ...draft.fields,
-                                      [key]: e.target.value,
-                                    },
-                                  })
+                              <span
+                                className={
+                                  key === "password"
+                                    ? "password-generator-field"
+                                    : undefined
                                 }
-                              />
+                              >
+                                <input
+                                  type={secret ? "password" : "text"}
+                                  autoComplete="off"
+                                  value={draft.fields[key] ?? ""}
+                                  onChange={(e) =>
+                                    setDraft({
+                                      ...draft,
+                                      fields: {
+                                        ...draft.fields,
+                                        [key]: e.target.value,
+                                      },
+                                    })
+                                  }
+                                />
+                                {key === "password" && (
+                                  <button
+                                    type="button"
+                                    className="secondary"
+                                    disabled={
+                                      busy || !status.online || needsSync
+                                    }
+                                    onClick={() => {
+                                      try {
+                                        const password =
+                                          generatePassword(generator);
+                                        setDraft({
+                                          ...draft,
+                                          fields: { ...draft.fields, password },
+                                        });
+                                      } catch {
+                                        setError(
+                                          t("Не удалось сгенерировать пароль."),
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    {t("Сгенерировать пароль")}
+                                  </button>
+                                )}
+                              </span>
                             )}
                           </label>
                         ))}

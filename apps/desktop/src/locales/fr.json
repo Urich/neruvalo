@@ -227,5 +227,15 @@
   "Включая инструменты сборки и зависимости поддерживаемых платформ.": "Comprend les outils de compilation et les dépendances des plateformes prises en charge.",
   "Поиск компонентов": "Rechercher des composants",
   "Вернуться ко входу": "Retour à la connexion",
-  "Вернуться в хранилище": "Retour au coffre"
+  "Вернуться в хранилище": "Retour au coffre",
+  "Генератор паролей": "Générateur de mots de passe",
+  "Длина пароля": "Longueur du mot de passe",
+  "Строчные буквы (a–z)": "Minuscules (a–z)",
+  "Заглавные буквы (A–Z)": "Majuscules (A–Z)",
+  "Цифры (0–9)": "Chiffres (0–9)",
+  "Специальные символы": "Caractères spéciaux",
+  "Исключать похожие символы (I, l, 1, O, 0, o)": "Exclure les caractères similaires (I, l, 1, O, 0, o)",
+  "Каждый выбранный набор символов обязательно используется. Пароль создаётся локально.": "Chaque jeu sélectionné est utilisé. Les mots de passe sont générés localement.",
+  "Сгенерировать пароль": "Générer un mot de passe",
+  "Не удалось сгенерировать пароль.": "Impossible de générer un mot de passe."
 }

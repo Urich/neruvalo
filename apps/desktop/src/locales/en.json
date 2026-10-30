@@ -227,5 +227,15 @@
   "Включая инструменты сборки и зависимости поддерживаемых платформ.": "Includes build tools and dependencies for supported platforms.",
   "Поиск компонентов": "Search components",
   "Вернуться ко входу": "Back to sign in",
-  "Вернуться в хранилище": "Back to vault"
+  "Вернуться в хранилище": "Back to vault",
+  "Генератор паролей": "Password generator",
+  "Длина пароля": "Password length",
+  "Строчные буквы (a–z)": "Lowercase letters (a–z)",
+  "Заглавные буквы (A–Z)": "Uppercase letters (A–Z)",
+  "Цифры (0–9)": "Digits (0–9)",
+  "Специальные символы": "Special characters",
+  "Исключать похожие символы (I, l, 1, O, 0, o)": "Exclude similar characters (I, l, 1, O, 0, o)",
+  "Каждый выбранный набор символов обязательно используется. Пароль создаётся локально.": "Every selected character set is used. Passwords are generated locally.",
+  "Сгенерировать пароль": "Generate password",
+  "Не удалось сгенерировать пароль.": "Could not generate a password."
 }

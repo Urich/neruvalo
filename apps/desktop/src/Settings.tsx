@@ -1,3 +1,5 @@
+import { GeneratorSettings } from "./GeneratorSettings";
+import { GeneratorOptions } from "./passwordGenerator";
 import { useState } from "react";
 import { languages, useI18n } from "./i18n";
 import {
@@ -20,7 +22,11 @@ export function Settings({
   onClipboard,
   shortcuts,
   onShortcuts,
+  generator,
+  onGenerator,
 }: {
+  generator: GeneratorOptions;
+  onGenerator: (value: GeneratorOptions) => void;
   login?: string;
   server: string;
   online?: boolean;
@@ -78,6 +84,7 @@ export function Settings({
           <p className="muted">{t("Настройка этого устройства")}</p>
         </>
       )}
+      <GeneratorSettings value={generator} onChange={onGenerator} />
       <h2>{t("Интерфейс")}</h2>
       <label>
         {t("Язык")}

@@ -1011,3 +1011,10 @@ kbd {
 .type-options button[aria-selected="true"] { background: #dfe8d8; color: #28543f; }
 
 .page-back { margin-bottom: 20px; }
+
+.password-generator-field {display:flex;gap:10px;align-items:center;}
+.password-generator-field input {flex:1;min-width:0;}
+.password-generator-field button {flex-shrink:0;white-space:nowrap;}
+.generator-option {display:flex;align-items:center;gap:10px;}
+.generator-option input[type="checkbox"] {width:18px;height:18px;margin:0;accent-color:#2b6149;}
+@media (max-width:700px) {.password-generator-field {flex-wrap:wrap;}.password-generator-field button {width:100%;}}

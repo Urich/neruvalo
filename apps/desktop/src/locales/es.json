@@ -227,5 +227,15 @@
   "Включая инструменты сборки и зависимости поддерживаемых платформ.": "Incluye herramientas de compilación y dependencias de las plataformas compatibles.",
   "Поиск компонентов": "Buscar componentes",
   "Вернуться ко входу": "Volver al inicio de sesión",
-  "Вернуться в хранилище": "Volver a la bóveda"
+  "Вернуться в хранилище": "Volver a la bóveda",
+  "Генератор паролей": "Generador de contraseñas",
+  "Длина пароля": "Longitud de contraseña",
+  "Строчные буквы (a–z)": "Minúsculas (a–z)",
+  "Заглавные буквы (A–Z)": "Mayúsculas (A–Z)",
+  "Цифры (0–9)": "Dígitos (0–9)",
+  "Специальные символы": "Caracteres especiales",
+  "Исключать похожие символы (I, l, 1, O, 0, o)": "Excluir caracteres similares (I, l, 1, O, 0, o)",
+  "Каждый выбранный набор символов обязательно используется. Пароль создаётся локально.": "Se usa cada conjunto seleccionado. Las contraseñas se generan localmente.",
+  "Сгенерировать пароль": "Generar contraseña",
+  "Не удалось сгенерировать пароль.": "No se pudo generar una contraseña."
 }
