@@ -46,7 +46,7 @@ fn read_copy(a: &Unlocked, c: &SharedCopy) -> Result<RecordData> {
             .as_str()
             .ok_or_else(|| anyhow!("INVALID_SHARED_COPY"))?
             .into(),
-        schema_version: value["schema_version"].as_u64().unwrap_or(0) as u32,
+        schema_version: serde_json::from_value(value["schema_version"].clone())?,
         title: value["title"].as_str().unwrap_or("").into(),
         fields: serde_json::from_value(value["fields"].clone())?,
         notes: value["notes"].as_str().unwrap_or("").into(),
@@ -79,7 +79,26 @@ pub(super) async fn attach(a: &Unlocked, r: &mut SaveRecord, data: &RecordData) 
     r.payload["sharing"] = json!({"revision":revision,"updates":updates});
     Ok(())
 }
+fn validate_copy_set(state: &Value) -> Result<()> {
+    let mut copies = std::collections::BTreeSet::new();
+    let mut shares = std::collections::BTreeSet::new();
+    for item in state["incoming"]
+        .as_array()
+        .ok_or_else(|| anyhow!("INVALID_SHARED_SNAPSHOT"))?
+    {
+        let c: SharedCopy = serde_json::from_value(item["copy"].clone())?;
+        ensure!(
+            c.copy_revision > 0
+                && c.source_revision > 0
+                && copies.insert(c.copy_id)
+                && shares.insert(c.share_id),
+            "INVALID_SHARED_SNAPSHOT"
+        );
+    }
+    Ok(())
+}
 pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<()> {
+    validate_copy_set(state)?;
     let old = cached(a).await?;
     let mut pins: BTreeMap<String, String> =
         match sqlx::query("SELECT value FROM meta WHERE name='share_pins'")
@@ -293,5 +312,23 @@ impl Client {
             .await?;
         self.sync().await?;
         Ok(json!({"changed":true}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn snapshot_rejects_duplicate_copies_and_nonpositive_revisions() {
+        let vector: Value = serde_json::from_str(include_str!(
+            "../../../docs/test-vectors/shared-copy-v2.json"
+        ))
+        .unwrap();
+        let item = json!({"copy":vector["copy"]});
+        assert!(validate_copy_set(&json!({"incoming":[item.clone()]})).is_ok());
+        assert!(validate_copy_set(&json!({"incoming":[item.clone(),item.clone()]})).is_err());
+        let mut invalid = item;
+        invalid["copy"]["copy_revision"] = json!(0);
+        assert!(validate_copy_set(&json!({"incoming":[invalid]})).is_err());
     }
 }
