@@ -724,8 +724,9 @@ impl Client {
         for v in &versions {
             verify_version(&a.profile, v)?;
         }
-        sharing::verify_snapshot(a, &snapshot["sharing"]).await?;
+        let share_guard = sharing::verify_snapshot(a, &snapshot["sharing"]).await?;
         let mut tx = a.cache.begin().await?;
+        sqlx::query("INSERT INTO meta(name,value) VALUES('share_guard',$1) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(&share_guard)?).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO meta(name,value) VALUES('sharing',$1) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(&snapshot["sharing"])?).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM versions")
             .execute(&mut *tx)

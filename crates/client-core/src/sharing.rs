@@ -97,9 +97,46 @@ fn validate_copy_set(state: &Value) -> Result<()> {
     }
     Ok(())
 }
-pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<()> {
+fn advance_guard(state: &Value, previous: &Value) -> Result<Value> {
+    validate_copy_set(state)?;
+    let mut next = previous.clone();
+    if !next.is_object() {
+        next = json!({});
+    }
+    for value in next.as_object_mut().expect("object").values_mut() {
+        value["active"] = json!(false);
+    }
+    for item in state["incoming"].as_array().expect("validated array") {
+        let c: SharedCopy = serde_json::from_value(item["copy"].clone())?;
+        let digest = crypto::digest(&crypto::b64(c.transcript()));
+        if let Some(old) = previous.get(&c.copy_id) {
+            ensure!(old["active"].as_bool() == Some(true), "REVOKED_SHARED_COPY");
+            ensure!(
+                c.copy_revision >= old["revision"].as_i64().unwrap_or(0),
+                "SHARED_COPY_ROLLBACK"
+            );
+            if c.copy_revision == old["revision"].as_i64().unwrap_or(0) {
+                ensure!(
+                    old["digest"].as_str() == Some(digest.as_str()),
+                    "SHARED_COPY_FORK"
+                );
+            }
+        }
+        next[&c.copy_id] = json!({"active":true,"revision":c.copy_revision,"digest":digest});
+    }
+    Ok(next)
+}
+pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<Value> {
     validate_copy_set(state)?;
     let old = cached(a).await?;
+    let guard: Value = match sqlx::query("SELECT value FROM meta WHERE name='share_guard'")
+        .fetch_optional(&a.cache)
+        .await?
+    {
+        Some(row) => serde_json::from_str(&row.get::<String, _>("value"))?,
+        None => json!({}),
+    };
+    let next_guard = advance_guard(state, &guard)?;
     let mut pins: BTreeMap<String, String> =
         match sqlx::query("SELECT value FROM meta WHERE name='share_pins'")
             .fetch_optional(&a.cache)
@@ -133,7 +170,7 @@ pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<()> {
         }
     }
     set_meta(&a.cache, "share_pins", &serde_json::to_string(&pins)?).await?;
-    Ok(())
+    Ok(next_guard)
 }
 impl Client {
     pub async fn sharing(&mut self) -> Result<Value> {
@@ -330,5 +367,33 @@ mod tests {
         let mut invalid = item;
         invalid["copy"]["copy_revision"] = json!(0);
         assert!(validate_copy_set(&json!({"incoming":[invalid]})).is_err());
+    }
+    #[test]
+    fn confirmed_removal_cannot_be_replayed_as_a_new_copy() {
+        let vector: Value = serde_json::from_str(include_str!(
+            "../../../docs/test-vectors/shared-copy-v2.json"
+        ))
+        .unwrap();
+        let item = json!({"copy":vector["copy"]});
+        let state = json!({"incoming":[item.clone()]});
+        let first = advance_guard(&state, &json!({})).unwrap();
+        let removed = advance_guard(&json!({"incoming":[]}), &first).unwrap();
+        assert!(advance_guard(&state, &removed)
+            .unwrap_err()
+            .to_string()
+            .contains("REVOKED_SHARED_COPY"));
+        let mut reissued = item;
+        reissued["copy"]["copy_id"] = json!("new-copy-id");
+        reissued["copy"]["share_id"] = json!("new-share-id");
+        assert!(advance_guard(&json!({"incoming":[reissued]}), &removed).is_ok());
+        let mut fork = state.clone();
+        fork["incoming"][0]["copy"]["key_box"] = json!("another-container");
+        assert!(advance_guard(&fork, &first)
+            .unwrap_err()
+            .to_string()
+            .contains("SHARED_COPY_FORK"));
+        let mut older = state;
+        older["incoming"][0]["copy"]["copy_revision"] = json!(1);
+        assert!(advance_guard(&older, &first).is_err());
     }
 }
