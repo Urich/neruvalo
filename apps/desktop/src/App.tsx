@@ -207,12 +207,12 @@ export default function App() {
           (e: Entry) => !previous.some((old) => old.record_id === e.record_id),
         )
       )
-        setNotice("Вам предоставлен доступ к новой записи.");
+        setNotice("ui.youHaveReceivedAccessToANewEntry");
       return next;
     });
     setOutgoing(sharing?.outgoing ?? []);
     if (sharing?.notifications?.length)
-      setNotice("Вам предоставлен доступ к новой записи.");
+      setNotice("ui.youHaveReceivedAccessToANewEntry");
     setSelected((current) =>
       current?.received
         ? (sharing?.incoming ?? []).find(
@@ -293,7 +293,7 @@ export default function App() {
         field,
         seconds: clipboardSeconds,
       });
-      if (epoch === generation.current) setNotice("Скопировано.");
+      if (epoch === generation.current) setNotice("ui.copied");
     });
   }
   const accessibleProfiles = profiles.filter(
@@ -370,20 +370,20 @@ export default function App() {
           document.execCommand(command);
         });
       items = [
-        { label: t("Отменить"), action: edit("undo") },
-        { label: t("Повторить"), action: edit("redo") },
+        { label: t("ui.undo"), action: edit("undo") },
+        { label: t("ui.redo"), action: edit("redo") },
         {
-          label: t("Вырезать"),
+          label: t("ui.cut"),
           disabled: input.readOnly || start === end,
           action: edit("cut"),
         },
         {
-          label: t("Копировать"),
+          label: t("ui.copy"),
           disabled: start === end,
           action: edit("copy"),
         },
         {
-          label: t("Вставить"),
+          label: t("ui.paste"),
           disabled: input.readOnly,
           action: safe(() => {
             void run(async () => {
@@ -397,7 +397,7 @@ export default function App() {
           }),
         },
         {
-          label: t("Выделить всё"),
+          label: t("ui.selectAll"),
           action: safe(() => {
             input.focus();
             input.select();
@@ -412,19 +412,19 @@ export default function App() {
         if (group) {
           items = [
             {
-              label: t("Добавить запись"),
+              label: t("ui.addEntryLabel"),
               disabled: busy || !status.online || needsSync || !!group.archived,
               action: safe(() =>
                 requestLeave(() => beginNew(kind || "login", group.id)),
               ),
             },
             {
-              label: t("Создать подгруппу"),
+              label: t("ui.createSubgroup"),
               disabled: busy || !status.online || needsSync || !!group.archived,
               action: safe(() => requestLeave(() => beginGroup(group.id))),
             },
             {
-              label: t(archive ? "Вернуть из архива" : "В архив"),
+              label: t(archive ? "ui.restoreFromArchive" : "ui.archiveEntry"),
               disabled: busy || !status.online || needsSync,
               action: safe(() =>
                 requestLeave(() =>
@@ -465,18 +465,18 @@ export default function App() {
           }),
         });
         if (fieldsOf(record.data).some((f) => f[0] === "login"))
-          items.push(copyItem("login", t("Скопировать логин")));
+          items.push(copyItem("login", t("ui.copyUsername")));
         if (fieldsOf(record.data).some((f) => f[0] === "password"))
-          items.push(copyItem("password", t("Скопировать пароль")));
-        if (field) items.push(copyItem(field, t("Копировать поле")));
+          items.push(copyItem("password", t("ui.copyPassword")));
+        if (field) items.push(copyItem(field, t("ui.copyField")));
         if (record.received) {
           items.push(
             {
-              label: t("Открыть"),
+              label: t("ui.open"),
               action: safe(() => requestLeave(() => open(record))),
             },
             {
-              label: t("Убрать у меня"),
+              label: t("ui.removeForMe"),
               disabled: busy || !status.online || needsSync,
               action: safe(() => requestLeave(() => setDismissTarget(record))),
             },
@@ -485,17 +485,17 @@ export default function App() {
           return;
         }
         items.push({
-          label: t("Поделиться"),
+          label: t("ui.share"),
           disabled: busy || !status.online || needsSync || record.archived,
           action: safe(() => requestLeave(() => setShareTarget(record))),
         });
         items.push(
           {
-            label: t("Открыть"),
+            label: t("ui.open"),
             action: safe(() => requestLeave(() => open(record))),
           },
           {
-            label: t("Редактировать"),
+            label: t("ui.edit"),
             disabled: busy || !status.online || needsSync || record.archived,
             action: safe(() =>
               requestLeave(() => {
@@ -505,7 +505,7 @@ export default function App() {
             ),
           },
           {
-            label: t("История"),
+            label: t("ui.history"),
             disabled: busy,
             action: safe(() =>
               requestLeave(() => {
@@ -515,7 +515,7 @@ export default function App() {
             ),
           },
           {
-            label: t(record.archived ? t("Вернуть из архива") : t("В архив")),
+            label: t(record.archived ? t("ui.restoreFromArchive") : t("ui.archiveEntry")),
             disabled: busy || !status.online || needsSync,
             action: safe(() =>
               requestLeave(() => {
@@ -618,8 +618,8 @@ export default function App() {
   async function signIn() {
     await run(async () => {
       if (!configured || launch.startup_error)
-        throw new Error("Проверьте параметры запуска");
-      if (certReady) throw new Error("Сначала сохраните мастер-сертификат.");
+        throw new Error("ui.checkLaunchArguments");
+      if (certReady) throw new Error("ui.saveTheRecoveryFileFirst");
       if (offline) await call("unlock_offline", { id: offline, password });
       else await call("login", { server, login, password });
       setPassword("");
@@ -652,8 +652,8 @@ export default function App() {
       setCode("");
       setNotice(
         recovery
-          ? "Аккаунт создан. Сохраните мастер-сертификат перед входом. После закрытия приложения восстановить этот файл будет нельзя."
-          : "Аккаунт создан. Теперь войдите.",
+          ? "ui.accountCreatedSaveTheRecoveryFileBeforeSigningInThisFileCannotBeRetrievedAfterTheApplicationCloses"
+          : "ui.accountCreatedYouCanNowSignIn",
       );
     });
   }
@@ -666,7 +666,7 @@ export default function App() {
       setHistory([]);
       setGroupDraft(null);
       await refresh();
-      setNotice("Все изменения загружены.");
+      setNotice("ui.allChangesDownloaded");
     });
   }
   async function save() {
@@ -866,7 +866,7 @@ export default function App() {
                 });
               }}
             >
-              <Icon name="all" /> <span>{t("Все записи")}</span>
+              <Icon name="all" /> <span>{t("ui.allEntries")}</span>
               <b>{entries.filter((e) => !e.archived).length}</b>
             </button>
             <button
@@ -882,13 +882,13 @@ export default function App() {
                 });
               }}
             >
-              <Icon name="archive" /> <span>{t("Архив")}</span>
+              <Icon name="archive" /> <span>{t("ui.archive")}</span>
             </button>
             {(["outgoing", "received"] as const).map((view) => (
               <button
                 key={view}
                 aria-label={t(
-                  view === "outgoing" ? "С общим доступом" : "Полученные",
+                  view === "outgoing" ? "ui.sharedByMe" : "ui.received",
                 )}
                 className={shareView === view ? "nav active" : "nav"}
                 onClick={() =>
@@ -906,7 +906,7 @@ export default function App() {
               >
                 <Icon name="share" />
                 <span>
-                  {t(view === "outgoing" ? "С общим доступом" : "Полученные")}
+                  {t(view === "outgoing" ? "ui.sharedByMe" : "ui.received")}
                 </span>
                 <b>
                   {view === "received"
@@ -932,7 +932,7 @@ export default function App() {
               >
                 <Icon name={key} />
                 <span>
-                  {t(key === "document" ? t("Документы") : types[key].label)}
+                  {t(key === "document" ? t("ui.documents") : types[key].label)}
                 </span>
               </button>
             ))}
@@ -944,39 +944,39 @@ export default function App() {
             onClick={() => setPage(page === "settings" ? "vault" : "settings")}
           >
             <Icon name="settings" />
-            <span>{t("Настройки")}</span>
+            <span>{t("ui.settings")}</span>
           </button>
           <button
             className={page === "about" ? "nav active" : "nav"}
             onClick={() => setPage(page === "about" ? "vault" : "about")}
           >
             <Icon name="info" />
-            <span>{t("О программе")}</span>
+            <span>{t("ui.about")}</span>
           </button>
           <div className="sidebar-foot">
             <span className="shield">◇</span>
             <p>
-              {t("Ваши секреты шифруются")}
+              {t("ui.yourSecretsAreEncrypted")}
               <br />
-              {t("на вашем устройстве.")}
+              {t("ui.onYourDevice")}
             </p>
-            <small>{t("Только тестовые данные")}</small>
+            <small>{t("ui.testDataOnly")}</small>
           </div>
         </div>
       </aside>
       <main>
         <header>
           <div className="breadcrumb">
-            {t("Личное пространство")}
-            <span>/</span> {archive ? t("Архив") : t("Хранилище")}
+            {t("ui.personalSpace")}
+            <span>/</span> {archive ? t("ui.archive") : t("ui.vault")}
           </div>
           <div className="connection">
             <i className={status.online ? "online" : ""} />
             {status.unlocked
               ? status.online
-                ? t("На связи")
-                : t("Офлайн · только чтение")
-              : t("Заблокировано")}
+                ? t("ui.online")
+                : t("ui.offlineReadOnly")
+              : t("ui.locked")}
           </div>
           {status.unlocked && (
             <>
@@ -989,7 +989,7 @@ export default function App() {
                   })
                 }
               >
-                {t("↻ Синхронизировать")}
+                {t("ui.synchronize")}
               </button>
               <button
                 className="subtle"
@@ -998,7 +998,7 @@ export default function App() {
                   clear();
                 }}
               >
-                {t("Заблокировать")}
+                {t("ui.lock")}
               </button>
             </>
           )}
@@ -1012,8 +1012,8 @@ export default function App() {
             >
               {t(
                 status.unlocked
-                  ? "Вернуться в хранилище"
-                  : "Вернуться ко входу",
+                  ? "ui.backToVault"
+                  : "ui.backToSignIn",
               )}
             </button>
           )}
@@ -1062,45 +1062,45 @@ export default function App() {
             <div className="auth-layout">
               <section className="intro">
                 <div className="eyebrow">
-                  {t("СЕКРЕТЫ ПОД ВАШИМ КОНТРОЛЕМ")}
+                  {t("ui.yourSecretsYourControl")}
                 </div>
                 <h1>
-                  {t("Всё важное.")}
+                  {t("ui.everythingThatMatters")}
                   <br />
-                  <em>{t("Только ваше.")}</em>
+                  <em>{t("ui.onlyYours")}</em>
                 </h1>
                 <p>
-                  {t("Пароли, карты, ключи и личные записи.")}
+                  {t("ui.passwordsCardsKeysAndPersonalNotes")}
                   <br />
-                  {t("Одно защищённое пространство на вашем сервере.")}
+                  {t("ui.oneProtectedSpaceOnYourServer")}
                 </p>
                 <div className="intro-line" />
                 <div className="facts">
-                  <span>{t("◎ Клиентское шифрование")}</span>
-                  <span>{t("⌁ Открытый исходный код")}</span>
-                  <span>{t("▤ Офлайн-просмотр")}</span>
+                  <span>{t("ui.clientSideEncryption")}</span>
+                  <span>{t("ui.openSource")}</span>
+                  <span>{t("ui.offlineViewing")}</span>
                 </div>
               </section>
               <section className="auth-card">
                 <div className="card-symbol">◇</div>
                 <h2>
                   {mode === "verify"
-                    ? t("Подтвердите email")
+                    ? t("ui.verifyEmail")
                     : mode === "register"
-                      ? t("Создать аккаунт")
-                      : t("Открыть хранилище")}
+                      ? t("ui.createAccount")
+                      : t("ui.unlockVault")}
                 </h2>
                 <p className="muted">
                   {mode === "verify"
                     ? t(
-                        "В прототипе письмо записано в закрытый dev-outbox сервера.",
+                        "ui.inThisPrototypeEmailIsSavedInTheServerSPrivateDevOutbox",
                       )
-                    : t("Пароль остаётся на вашем устройстве.")}
+                    : t("ui.yourPasswordStaysOnYourDevice")}
                 </p>
                 {mode === "verify" ? (
                   <>
                     <label>
-                      {t("Код из письма")}
+                      {t("ui.emailCode")}
                       <input
                         value={code}
                         onChange={(e) => setCode(e.target.value)}
@@ -1108,7 +1108,7 @@ export default function App() {
                       />
                     </label>
                     <p className="ticket">
-                      {t("Файл письма:")}
+                      {t("ui.emailFile")}
                       {ticket}.txt
                     </p>
                     <button
@@ -1116,7 +1116,7 @@ export default function App() {
                       disabled={busy || !code}
                       onClick={finishRegistration}
                     >
-                      {t("Подтвердить")}
+                      {t("ui.confirm")}
                     </button>
                   </>
                 ) : (
@@ -1128,7 +1128,7 @@ export default function App() {
                   >
                     {mode === "login" && (
                       <label>
-                        {t("Сохранённые аккаунты")}
+                        {t("ui.savedAccounts")}
                         <select
                           value={offline}
                           onChange={(e) => {
@@ -1142,10 +1142,10 @@ export default function App() {
                             }
                           }}
                         >
-                          <option value="">{t("Онлайн-вход")}</option>
+                          <option value="">{t("ui.onlineSignIn")}</option>
                           {accessibleProfiles.map((p) => (
                             <option value={p.id} key={p.id}>
-                              {p.login} · {p.server} {t("· офлайн")}
+                              {p.login} · {p.server} {t("ui.offline")}
                             </option>
                           ))}
                         </select>
@@ -1153,14 +1153,14 @@ export default function App() {
                     )}
                     {offline && (
                       <label>
-                        {t("Сервер")}
+                        {t("ui.server")}
                         <input readOnly value={server} dir="ltr" />
                       </label>
                     )}
                     {!offline && (
                       <>
                         <label>
-                          {t("Сервер")}
+                          {t("ui.server")}
                           {launch.pinned_server ? (
                             <input
                               value={launch.pinned_server}
@@ -1184,12 +1184,12 @@ export default function App() {
                                   </option>
                                 ))}
                                 <option value="__new">
-                                  {t("Другой сервер…")}
+                                  {t("ui.otherServer")}
                                 </option>
                               </select>
                               {otherServer && (
                                 <input
-                                  aria-label={t("Адрес сервера")}
+                                  aria-label={t("ui.serverAddress")}
                                   value={server}
                                   onChange={(e) => setServer(e.target.value)}
                                   autoComplete="url"
@@ -1201,7 +1201,7 @@ export default function App() {
                           )}
                         </label>
                         <label>
-                          {t("Логин")}
+                          {t("ui.username")}
                           <input
                             value={login}
                             onChange={(e) => setLogin(e.target.value)}
@@ -1222,7 +1222,7 @@ export default function App() {
                       </label>
                     )}
                     <label>
-                      {t("Пароль")}
+                      {t("ui.password")}
                       <input
                         type="password"
                         value={password}
@@ -1242,7 +1242,7 @@ export default function App() {
                           checked={recovery}
                           onChange={(e) => setRecovery(e.target.checked)}
                         />
-                        {t("Восстановление мастер-сертификатом")}
+                        {t("ui.recoveryWithSecretFile")}
                       </label>
                     )}
                     <button
@@ -1255,10 +1255,10 @@ export default function App() {
                       }
                     >
                       {busy
-                        ? t("Пожалуйста, подождите…")
+                        ? t("ui.pleaseWait")
                         : mode === "register"
-                          ? t("Создать аккаунт")
-                          : t("Открыть хранилище →")}
+                          ? t("ui.createAccount")
+                          : t("ui.unlockVaultLabel")}
                     </button>
                   </form>
                 )}
@@ -1271,12 +1271,12 @@ export default function App() {
                         if (!saved) return;
                         setCertReady(false);
                         setNotice(
-                          "Мастер-сертификат сохранён. Храните его отдельно.",
+                          "ui.recoveryFileSavedKeepItSeparately",
                         );
                       })
                     }
                   >
-                    {t("Сохранить мастер-сертификат")}
+                    {t("ui.saveRecoveryFile")}
                   </button>
                 )}
                 <div className="auth-links">
@@ -1292,8 +1292,8 @@ export default function App() {
                   >
                     {" "}
                     {mode === "register"
-                      ? t("У меня есть аккаунт")
-                      : t("Создать аккаунт")}
+                      ? t("ui.iHaveAnAccount")
+                      : t("ui.createAccount")}
                   </button>
                   <button
                     disabled={
@@ -1303,21 +1303,21 @@ export default function App() {
                       run(async () => {
                         if (!password)
                           throw new Error(
-                            "Введите новый мастер-пароль в поле выше, затем выберите сертификат.",
+                            "ui.enterANewPasswordAboveThenChooseYourRecoveryFile",
                           );
                         const result = await call("recover_file", { password });
                         if (result) {
                           setPassword("");
-                          setNotice("Пароль изменён. Войдите с новым паролем.");
+                          setNotice("ui.passwordChangedSignInWithTheNewPassword");
                         }
                       })
                     }
                   >
-                    {t("Восстановить доступ")}
+                    {t("ui.recoverAccess")}
                   </button>
                 </div>
                 <div className="local-warning">
-                  {t("Прототип. Не сохраняйте настоящие секреты.")}
+                  {t("ui.prototypeDoNotStoreRealSecrets")}
                 </div>
               </section>
             </div>
@@ -1329,7 +1329,7 @@ export default function App() {
                     <bdi>{status.login}</bdi>
                   </strong>
                   <span dir="ltr">{activeServer}</span>
-                  {archive && <small>{t("Архив")}</small>}
+                  {archive && <small>{t("ui.archive")}</small>}
                 </div>
                 <div className="page-actions">
                   <button
@@ -1337,14 +1337,14 @@ export default function App() {
                     disabled={busy || !status.online || needsSync}
                     onClick={() => requestLeave(() => beginGroup())}
                   >
-                    {t("Создать группу")}
+                    {t("ui.createGroup")}
                   </button>
                   <button
                     className="primary"
                     disabled={busy || !status.online}
                     onClick={requestNew}
                   >
-                    {t("＋ Добавить запись")}
+                    {t("ui.addEntry")}
                   </button>
                 </div>
               </section>
@@ -1353,15 +1353,15 @@ export default function App() {
                   <div className="search">
                     <span>⌕</span>
                     <input
-                      placeholder={t("Поиск по названию, группе или тегу")}
+                      placeholder={t("ui.searchTitleGroupOrTag")}
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                     />
                   </div>
                   <div className="list-caption">
-                    {t(kind ? types[kind].label : t("Все типы"))}
+                    {t(kind ? types[kind].label : t("ui.allTypes"))}
                     <span>
-                      {t("Записи")}:{" "}
+                      {t("ui.entries")}:{" "}
                       {new Intl.NumberFormat(language).format(
                         visibleCount(tree),
                       )}
@@ -1380,12 +1380,12 @@ export default function App() {
                   ) : (
                     <div className="empty">
                       <span>◇</span>
-                      <h3>{t("Здесь пока тихо")}</h3>
+                      <h3>{t("ui.noEntriesHereYet")}</h3>
                       <p>
                         {archive
-                          ? t("Архивированные записи появятся здесь.")
+                          ? t("ui.archivedEntriesWillAppearHere")
                           : t(
-                              "Добавьте первую запись — она будет зашифрована до отправки.",
+                              "ui.addYourFirstEntryItWillBeEncryptedBeforeBeingSent",
                             )}
                       </p>
                     </div>
@@ -1407,7 +1407,7 @@ export default function App() {
                     <>
                       <div className="detail-heading">
                         <h2>
-                          {selected ? t("Редактирование") : t("Новая запись")}
+                          {selected ? t("ui.editing") : t("ui.newEntry")}
                         </h2>
                         <button
                           className="subtle"
@@ -1415,7 +1415,7 @@ export default function App() {
                             requestLeave(() => setDraft(undefined))
                           }
                         >
-                          {t("Отмена")}
+                          {t("ui.cancel")}
                         </button>
                       </div>
                       <TypePicker
@@ -1429,7 +1429,7 @@ export default function App() {
                         }
                       />
                       <label>
-                        {t("Название")}
+                        {t("ui.title")}
                         <input
                           value={draft.title}
                           onChange={(e) =>
@@ -1440,7 +1440,7 @@ export default function App() {
                       {draft.record_type === "document" && (
                         <>
                           <label>
-                            {t("Шаблон документа")}
+                            {t("ui.documentTemplate")}
                             <select
                               value={draft.fields.template ?? "custom"}
                               onChange={(e) =>
@@ -1475,7 +1475,7 @@ export default function App() {
                                 })
                               }
                             />
-                            {t("Бессрочный документ")}
+                            {t("ui.noExpiryDate")}
                           </label>
                         </>
                       )}
@@ -1547,12 +1547,12 @@ export default function App() {
                                         });
                                       } catch {
                                         setError(
-                                          t("Не удалось сгенерировать пароль."),
+                                          t("ui.couldNotGenerateAPassword"),
                                         );
                                       }
                                     }}
                                   >
-                                    {t("Сгенерировать пароль")}
+                                    {t("ui.generatePassword")}
                                   </button>
                                 )}
                               </span>
@@ -1562,7 +1562,7 @@ export default function App() {
                       {draft.record_type === "document" && (
                         <div className="two">
                           <label>
-                            {t("Дополнительное поле")}
+                            {t("ui.customField")}
                             <input
                               value={customName}
                               onChange={(e) => setCustomName(e.target.value)}
@@ -1585,12 +1585,12 @@ export default function App() {
                               setCustomName("");
                             }}
                           >
-                            {t("Добавить поле")}
+                            {t("ui.addField")}
                           </button>
                         </div>
                       )}
                       <label>
-                        {t("Заметки")}
+                        {t("ui.notes")}
                         <textarea
                           rows={4}
                           value={draft.notes}
@@ -1601,14 +1601,14 @@ export default function App() {
                       </label>
                       <div className="two">
                         <label>
-                          {t("Группа")}
+                          {t("ui.group")}
                           <select
                             value={draftGroup ?? ""}
                             onChange={(e) =>
                               setDraftGroup(e.target.value || null)
                             }
                           >
-                            <option value="">{t("Корень списка")}</option>
+                            <option value="">{t("ui.topLevel")}</option>
                             {groups
                               .filter((g) => !g.archived)
                               .map((g) => (
@@ -1619,7 +1619,7 @@ export default function App() {
                           </select>
                         </label>
                         <label>
-                          {t("Теги через запятую")}
+                          {t("ui.tagsCommaSeparated")}
                           <input
                             value={draft.tags.join(", ")}
                             onChange={(e) =>
@@ -1644,7 +1644,7 @@ export default function App() {
                         }
                         onClick={save}
                       >
-                        {t("Зашифровать и сохранить")}
+                        {t("ui.encryptAndSave")}
                       </button>
                     </>
                   ) : selected ? (
@@ -1652,7 +1652,7 @@ export default function App() {
                       <div className="detail-heading">
                         <div>
                           <span className="eyebrow">
-                            {t("ВЕРСИЯ")} {selected.revision}
+                            {t("ui.version")} {selected.revision}
                           </span>
                           <h2>
                             <bdi>{selected.data.title}</bdi>
@@ -1661,7 +1661,7 @@ export default function App() {
                         <span className="large-icon">
                           <Icon
                             name={selected.data.record_type}
-                            label={t(currentType?.label ?? "Неизвестный тип")}
+                            label={t(currentType?.label ?? "ui.unknownType")}
                           />
                         </span>
                       </div>
@@ -1699,8 +1699,8 @@ export default function App() {
                                       }
                                     >
                                       {revealed[key]
-                                        ? t("Скрыть")
-                                        : t("Показать")}
+                                        ? t("ui.hide")
+                                        : t("ui.show")}
                                     </button>
                                   )}
                                   <button
@@ -1709,7 +1709,7 @@ export default function App() {
                                       void copy(selected, key);
                                     }}
                                   >
-                                    {t("Копировать")}
+                                    {t("ui.copy")}
                                   </button>
                                 </span>
                               </div>
@@ -1718,7 +1718,7 @@ export default function App() {
                         })}
                       {selected.data.record_type === "document" &&
                         selected.data.fields.never_expires === "true" && (
-                          <p>{t("Бессрочный документ")}</p>
+                          <p>{t("ui.noExpiryDate")}</p>
                         )}
                       {parentOf(selected.data, groups) && (
                         <p className="muted">
@@ -1732,7 +1732,7 @@ export default function App() {
                       )}
                       {selected.data.notes && (
                         <div className="field">
-                          <small>{t("Заметки")}</small>
+                          <small>{t("ui.notes")}</small>
                           <p className="pre">{selected.data.notes}</p>
                         </div>
                       )}
@@ -1745,8 +1745,8 @@ export default function App() {
                       </div>
                       {selected.received && (
                         <p className="muted">
-                          {t("Владелец")}: <bdi>{selected.owner_login}</bdi> ·{" "}
-                          {t("Только чтение")}
+                          {t("ui.owner")}: <bdi>{selected.owner_login}</bdi> ·{" "}
+                          {t("ui.readOnly")}
                         </p>
                       )}
                       {!selected.received ? (
@@ -1761,7 +1761,7 @@ export default function App() {
                             }
                             onClick={() => setShareTarget(selected)}
                           >
-                            {t("Поделиться")}
+                            {t("ui.share")}
                             {selected.share_count
                               ? ` (${selected.share_count})`
                               : ""}
@@ -1776,7 +1776,7 @@ export default function App() {
                               setDraft(structuredClone(selected.data))
                             )}
                           >
-                            {t("Редактировать")}
+                            {t("ui.edit")}
                           </button>
                           <button
                             className="subtle"
@@ -1784,14 +1784,14 @@ export default function App() {
                               void loadHistory(selected);
                             }}
                           >
-                            {t("История")}
+                            {t("ui.history")}
                           </button>
                           <button
                             className="subtle"
                             disabled={busy || !status.online || needsSync}
                             onClick={() => setArchived(!archive)}
                           >
-                            {archive ? t("Вернуть из архива") : t("В архив")}
+                            {archive ? t("ui.restoreFromArchive") : t("ui.archiveEntry")}
                           </button>
                         </div>
                       ) : (
@@ -1800,12 +1800,12 @@ export default function App() {
                           disabled={busy || !status.online || needsSync}
                           onClick={() => setDismissTarget(selected)}
                         >
-                          {t("Убрать у меня")}
+                          {t("ui.removeForMe")}
                         </button>
                       )}
                       {!selected.received && history.length > 0 && (
                         <div className="history">
-                          <h3>{t("История владельца")}</h3>
+                          <h3>{t("ui.ownerHistory")}</h3>
                           {history.map((v) => (
                             <HistoryVersion
                               key={v.version_id}
@@ -1856,7 +1856,7 @@ export default function App() {
                             beginNew(kind || "login", selectedGroup.id)
                           }
                         >
-                          {t("Добавить запись")}
+                          {t("ui.addEntryLabel")}
                         </button>
                         <button
                           className="secondary"
@@ -1868,7 +1868,7 @@ export default function App() {
                           }
                           onClick={() => beginGroup(selectedGroup.id)}
                         >
-                          {t("Создать подгруппу")}
+                          {t("ui.createSubgroup")}
                         </button>
                         <button
                           className="secondary"
@@ -1881,18 +1881,18 @@ export default function App() {
                             })
                           }
                         >
-                          {t(archive ? "Вернуть из архива" : "В архив")}
+                          {t(archive ? "ui.restoreFromArchive" : "ui.archiveEntry")}
                         </button>
                       </div>
                     </div>
                   ) : (
                     <div className="empty detail-empty">
                       <span>⌁</span>
-                      <h3>{t("Каждая деталь под защитой")}</h3>
+                      <h3>{t("ui.everyDetailProtected")}</h3>
                       <p>
-                        {t("Выберите запись слева,")}
+                        {t("ui.chooseAnEntryOnTheLeft")}
                         <br />
-                        {t("чтобы посмотреть её содержимое.")}
+                        {t("ui.toViewItsContents")}
                       </p>
                     </div>
                   )}

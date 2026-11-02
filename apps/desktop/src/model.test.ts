@@ -14,7 +14,7 @@ describe("vault view rules", () => {
   });
   it("maps the exact agreed conflict message", () =>
     expect(errorText("RECORD_VERSION_MISMATCH")).toBe(
-      "Запись изменена на другом устройстве. Синхронизируйте устройства.",
+      "ui.thisEntryWasChangedOnAnotherDeviceSynchronizeYourDevices",
     ));
   it("contains all eight agreed types and sensitive card fields", () => {
     expect(Object.keys(types)).toHaveLength(8);

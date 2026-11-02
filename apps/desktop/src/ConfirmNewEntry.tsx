@@ -34,10 +34,10 @@ export function ConfirmNewEntry({
       }}
     >
       <h2 id="discard-title">
-        {t(general ? "Отменить изменения?" : "Начать новую запись?")}
+        {t(general ? "ui.discardChanges" : "ui.startANewEntry")}
       </h2>
       <p id="discard-description">
-        {t("Несохранённые изменения в текущей записи будут потеряны.")}
+        {t("ui.unsavedChangesToThisEntryWillBeLost")}
       </p>
       <div className="discard-actions">
         <button
@@ -46,10 +46,10 @@ export function ConfirmNewEntry({
           autoFocus
           onClick={onCancel}
         >
-          {t("Продолжить редактирование")}
+          {t("ui.keepEditing")}
         </button>
         <button type="button" className="primary" onClick={onConfirm}>
-          {t(general ? "Продолжить" : "Начать новую запись")}
+          {t(general ? "ui.continue" : "ui.startNewEntry")}
         </button>
       </div>
     </dialog>

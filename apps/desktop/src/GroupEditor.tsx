@@ -20,13 +20,13 @@ export function GroupEditor({
   return (
     <>
       <div className="detail-heading">
-        <h2>{t("Новая группа")}</h2>
+        <h2>{t("ui.newGroup")}</h2>
         <button className="subtle" onClick={onCancel}>
-          {t("Отмена")}
+          {t("ui.cancel")}
         </button>
       </div>
       <label>
-        {t("Название группы")}
+        {t("ui.groupName")}
         <input
           autoFocus
           value={draft.title}
@@ -34,14 +34,14 @@ export function GroupEditor({
         />
       </label>
       <label>
-        {t("Родительская группа")}
+        {t("ui.parentGroup")}
         <select
           value={draft.parent ?? ""}
           onChange={(e) =>
             onChange({ ...draft, parent: e.target.value || null })
           }
         >
-          <option value="">{t("Корень списка")}</option>
+          <option value="">{t("ui.topLevel")}</option>
           {groups.map((g) => (
             <option key={g.id} value={g.id}>
               {groupLabel(g.id, groups)}
@@ -54,7 +54,7 @@ export function GroupEditor({
         disabled={disabled || !draft.title.trim()}
         onClick={onSave}
       >
-        {t("Создать группу")}
+        {t("ui.createGroup")}
       </button>
     </>
   );

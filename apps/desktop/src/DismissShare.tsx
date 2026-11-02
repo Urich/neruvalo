@@ -26,21 +26,21 @@ export function DismissShare({
         onCancel();
       }}
     >
-      <h2 id="dismiss-title">{t("Убрать у меня")}</h2>
+      <h2 id="dismiss-title">{t("ui.removeForMe")}</h2>
       <p>
         <bdi>{title}</bdi>
       </p>
       <p>
         {t(
-          "Доступ исчезнет только у вас. Оригинал и копии других пользователей сохранятся.",
+          "ui.onlyYourAccessWillEndTheOriginalAndOtherUsersCopiesRemain",
         )}
       </p>
       <div className="discard-actions">
         <button autoFocus className="secondary" onClick={onCancel}>
-          {t("Отмена")}
+          {t("ui.cancel")}
         </button>
         <button className="primary" onClick={onConfirm}>
-          {t("Подтвердить")}
+          {t("ui.confirm")}
         </button>
       </div>
     </dialog>

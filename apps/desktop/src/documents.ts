@@ -9,13 +9,13 @@ export const documentTemplates = [
   "insurance",
 ] as const;
 export const templateLabels: Record<string, string> = {
-  custom: "Другой документ",
-  passport: "Паспорт",
-  national_id: "Удостоверение личности",
-  driver_license: "Водительское удостоверение",
-  visa: "Виза",
-  residence_permit: "Вид на жительство",
-  insurance: "Страховой полис",
+  custom: "ui.otherDocument",
+  passport: "ui.passport",
+  national_id: "ui.nationalId",
+  driver_license: "ui.drivingLicence",
+  visa: "ui.visa",
+  residence_permit: "ui.residencePermit",
+  insurance: "ui.insurancePolicy",
 };
 export function fieldsOf(data: Data): [string, string, boolean, boolean?][] {
   const known = types[data.record_type]?.fields ?? [];

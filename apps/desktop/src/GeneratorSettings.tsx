@@ -10,17 +10,17 @@ export function GeneratorSettings({
   const { t } = useI18n();
   const categories = ["lowercase", "uppercase", "digits", "symbols"] as const;
   const labels = [
-    "Строчные буквы (a–z)",
-    "Заглавные буквы (A–Z)",
-    "Цифры (0–9)",
-    "Специальные символы",
+    "ui.lowercaseLettersAZ",
+    "ui.uppercaseLettersAZ",
+    "ui.digits09",
+    "ui.specialCharacters",
   ];
   return (
     <section className="generator-settings">
-      <h2>{t("Генератор паролей")}</h2>
-      <p className="muted">{t("Настройка этого устройства")}</p>
+      <h2>{t("ui.passwordGenerator")}</h2>
+      <p className="muted">{t("ui.settingForThisDevice")}</p>
       <label>
-        {t("Длина пароля")}
+        {t("ui.passwordLength")}
         <select
           value={value.length}
           onChange={(e) =>
@@ -55,11 +55,11 @@ export function GeneratorSettings({
             onChange({ ...value, excludeSimilar: e.target.checked })
           }
         />
-        <span>{t("Исключать похожие символы (I, l, 1, O, 0, o)")}</span>
+        <span>{t("ui.excludeSimilarCharactersIL1O0O")}</span>
       </label>
       <p className="muted">
         {t(
-          "Каждый выбранный набор символов обязательно используется. Пароль создаётся локально.",
+          "ui.everySelectedCharacterSetIsUsedPasswordsAreGeneratedLocally",
         )}
       </p>
     </section>

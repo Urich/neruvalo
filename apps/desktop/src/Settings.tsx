@@ -43,16 +43,16 @@ export function Settings({
   const [error, setError] = useState("");
   return (
     <section className="settings-page">
-      <h1>{t("Настройки")}</h1>
+      <h1>{t("ui.settings")}</h1>
       {login && (
         <>
-          <h2>{t("Учётная запись")}</h2>
+          <h2>{t("ui.account")}</h2>
           <p>
             <bdi>{login}</bdi> · <bdi>{server}</bdi>
           </p>
-          <h2>{t("Безопасность")}</h2>
+          <h2>{t("ui.security")}</h2>
           <label>
-            {t("Блокировка")}
+            {t("ui.lockTimeout")}
             <select
               value={timeout}
               disabled={!online || busy}
@@ -60,39 +60,39 @@ export function Settings({
             >
               {[60, 300, 900, 0].map((s) => (
                 <option key={s} value={s}>
-                  {s ? t("Минуты") + ": " + s / 60 : t("Никогда")}
+                  {s ? t("ui.minutes") + ": " + s / 60 : t("ui.never")}
                 </option>
               ))}
             </select>
           </label>
           <p className="muted">
-            {t("Настройка аккаунта · сохраняется на сервере")}
+            {t("ui.accountSettingSavedOnServer")}
           </p>
           <label>
-            {t("Очистка буфера")}
+            {t("ui.clearClipboard")}
             <select
               value={clipboard}
               onChange={(e) => onClipboard(Number(e.target.value))}
             >
               {[30, 60, 120, 0].map((s) => (
                 <option key={s} value={s}>
-                  {s ? t("Секунды") + ": " + s : t("Не очищать")}
+                  {s ? t("ui.seconds") + ": " + s : t("ui.doNotClear")}
                 </option>
               ))}
             </select>
           </label>
-          <p className="muted">{t("Настройка этого устройства")}</p>
+          <p className="muted">{t("ui.settingForThisDevice")}</p>
         </>
       )}
       <GeneratorSettings value={generator} onChange={onGenerator} />
-      <h2>{t("Интерфейс")}</h2>
+      <h2>{t("ui.interface")}</h2>
       <label>
-        {t("Язык")}
+        {t("ui.language")}
         <select
           value={preference}
           onChange={(e) => setPreference(e.target.value)}
         >
-          <option value="auto">{t("Автоматически — язык системы")}</option>
+          <option value="auto">{t("ui.automaticSystemLanguage")}</option>
           {Object.entries(languages).map(([key, name]) => (
             <option key={key} value={key}>
               {name}
@@ -100,20 +100,20 @@ export function Settings({
           ))}
         </select>
       </label>
-      <p className="muted">{t("Настройка этого устройства")}</p>
+      <p className="muted">{t("ui.settingForThisDevice")}</p>
       {login && !isMobile() && (
         <>
-          <h2>{t("Сочетания клавиш")}</h2>
+          <h2>{t("ui.keyboardShortcuts")}</h2>
           <p className="muted">
-            {t("Действуют только в окне приложения вне полей ввода")}
+            {t("ui.onlyInThisWindowOutsideTextInputs")}
           </p>
           {(["login", "password"] as const).map((action) => (
             <div key={action} className="shortcut-row">
               <span>
                 {t(
                   action === "login"
-                    ? "Скопировать логин"
-                    : "Скопировать пароль",
+                    ? "ui.copyUsername"
+                    : "ui.copyPassword",
                 )}
               </span>
               <button
@@ -134,7 +134,7 @@ export function Settings({
                   const key = fromEvent(e.nativeEvent);
                   if (!key) {
                     setError(
-                      "Выберите сочетание Ctrl или Alt с буквой, цифрой или функциональной клавишей",
+                      "ui.chooseCtrlOrAltWithALetterDigitOrFunctionKey",
                     );
                     return;
                   }
@@ -144,7 +144,7 @@ export function Settings({
                       shortcuts[action === "login" ? "password" : "login"],
                     )
                   ) {
-                    setError("Это сочетание уже используется");
+                    setError("ui.shortcutAlreadyInUse");
                     return;
                   }
                   onShortcuts({ ...shortcuts, [action]: key });
@@ -153,7 +153,7 @@ export function Settings({
                 }}
               >
                 {capture === action
-                  ? t("Нажмите сочетание · Esc — отмена")
+                  ? t("ui.pressShortcutEscToCancel")
                   : shortcutText(shortcuts[action] as Shortcut)}
               </button>
               <button
@@ -163,7 +163,7 @@ export function Settings({
                   setCapture(null);
                 }}
               >
-                {t("Убрать")}
+                {t("ui.remove")}
               </button>
             </div>
           ))}
@@ -176,7 +176,7 @@ export function Settings({
               setError("");
             }}
           >
-            {t("Сбросить сочетания")}
+            {t("ui.resetShortcuts")}
           </button>
         </>
       )}

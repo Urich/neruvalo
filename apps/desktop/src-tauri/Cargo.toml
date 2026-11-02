@@ -9,11 +9,11 @@ tokio.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 zeroize.workspace = true
-tauri = { version = "2", optional = true }
+tauri = { version = "2", optional = true , features = [] }
 tauri-plugin-dialog = { version = "2", optional = true }
 arboard = { version = "3", default-features = false, optional = true }
 [build-dependencies]
-tauri-build = { version = "2", optional = true }
+tauri-build = { version = "2", optional = true , features = [] }
 [features]
 default = []
 custom-protocol = ["tauri/custom-protocol"]

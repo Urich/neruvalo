@@ -33,30 +33,30 @@ export function ArchiveDialog({
       }}
     >
       <h2 id="archive-title">
-        {t(request.archived ? "В архив" : "Вернуть из архива")}
+        {t(request.archived ? "ui.archiveEntry" : "ui.restoreFromArchive")}
       </h2>
       <p>
         <bdi>{request.title}</bdi>
       </p>
       <p>
-        {t("Записи")}: {counts.records} · {t("Группы")}: {counts.groups}
+        {t("ui.entries")}: {counts.records} · {t("ui.groups")}: {counts.groups}
       </p>
       <p>
-        {t("Без изменений")}: {counts.unchanged}
+        {t("ui.unchanged")}: {counts.unchanged}
       </p>
       <p>
         {t(
           request.archived
-            ? "Архивируется всё содержимое группы, включая скрытое фильтром."
-            : "Восстанавливается выбранный элемент или всё поддерево группы, а также необходимые группы-предки.",
+            ? "ui.allGroupContentsAreArchivedIncludingItemsHiddenByFilters"
+            : "ui.restoreTheSelectedItemOrTheEntireGroupSubtreeTogetherWithRequiredAncestorGroups",
         )}
       </p>
       <div className="discard-actions">
         <button autoFocus className="secondary" onClick={onCancel}>
-          {t("Отмена")}
+          {t("ui.cancel")}
         </button>
         <button className="primary" onClick={onConfirm}>
-          {t("Продолжить")}
+          {t("ui.continue")}
         </button>
       </div>
     </dialog>

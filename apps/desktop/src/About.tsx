@@ -43,34 +43,34 @@ export function About() {
     <section className="detail-panel about-panel">
       <h1>Neruvalo</h1>
       <p>
-        {t("О программе")} · {version}
+        {t("ui.about")} · {version}
       </p>
-      <p>{t("Прототип. Не сохраняйте настоящие секреты.")}</p>
+      <p>{t("ui.prototypeDoNotStoreRealSecrets")}</p>
       <p>
         {t(
-          "Менеджер паролей и секретов с открытым исходным кодом и собственным сервером.",
+          "ui.anOpenSourceSelfHostedPasswordAndSecretsManager",
         )}
       </p>
       <dl>
-        <dt>{t("Сборка")}</dt>
+        <dt>{t("ui.build")}</dt>
         <dd>
           <code>{commit.slice(0, 12)}</code>
           {dirty ? " + local changes" : ""}
           {platform && ` · ${platform.os} / ${platform.arch}`}
         </dd>
-        <dt>{t("Совместимость")}</dt>
+        <dt>{t("ui.compatibility")}</dt>
         <dd>
-          {t("Протокол")}: 2 · {t("Формат записей")}: 1 · {t("Формат групп")}: 2
+          {t("ui.protocol")}: 2 · {t("ui.recordFormat")}: 1 · {t("ui.groupFormat")}: 2
         </dd>
       </dl>
       <p>Urich &amp; contributors · AGPL-3.0-only</p>
       <p>
         {t(
-          "Разрешены использование, изменение и распространение по условиям AGPL-3.0-only. Программа предоставляется без гарантий в пределах лицензии.",
+          "ui.useModificationAndRedistributionArePermittedUnderAgpl30OnlyTheSoftwareComesWithoutWarrantyToTheExtentPermittedByTheLicense",
         )}
       </p>
       <p>
-        {t("Исходный код")}:{" "}
+        {t("ui.sourceCode")}:{" "}
         <a
           href={source}
           onClick={(e) => {
@@ -83,16 +83,16 @@ export function About() {
       </p>
       <p>
         <button className="subtle" onClick={() => link("issues")}>
-          {t("Сообщить об ошибке")}
+          {t("ui.reportAnIssue")}
         </button>{" "}
         ·{" "}
         <button className="subtle" onClick={() => link("security")}>
-          {t("Сообщить об уязвимости")}
+          {t("ui.reportAVulnerability")}
         </button>
       </p>
       <p>
         {t(
-          "Управляемый сервер предоставляется как отдельная платная услуга. Самостоятельное размещение доступно по лицензии проекта.",
+          "ui.managedHostingIsASeparatePaidServiceSelfHostingIsAvailableUnderTheProjectLicense",
         )}
       </p>
       <details>
@@ -101,16 +101,16 @@ export function About() {
       </details>
       <details>
         <summary>
-          {t("Сторонние компоненты")} ({components.length})
+          {t("ui.thirdPartyComponents")} ({components.length})
         </summary>
         <p>
           {t(
-            "Включая инструменты сборки и зависимости поддерживаемых платформ.",
+            "ui.includesBuildToolsAndDependenciesForSupportedPlatforms",
           )}
         </p>
         <input
-          aria-label={t("Поиск компонентов")}
-          placeholder={t("Поиск компонентов")}
+          aria-label={t("ui.searchComponents")}
+          placeholder={t("ui.searchComponents")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />

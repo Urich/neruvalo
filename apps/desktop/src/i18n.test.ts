@@ -27,7 +27,7 @@ describe("bundled language catalogs", () => {
         true,
       );
     }
-    expect(translate("Пароль", "ja")).toBe("パスワード");
-    expect(translate("Пароль", "unsupported")).toBe("Password");
+    expect(translate("ui.password", "ja")).toBe("パスワード");
+    expect(translate("ui.password", "unsupported")).toBe("Password");
   });
 });

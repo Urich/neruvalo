@@ -17,8 +17,8 @@ export function HistoryVersion({
   return (
     <details className="history-version">
       <summary>
-        {t("Версия")} {entry.revision} · {entry.data.title}
-        {entry.archived ? t(" · в архиве") : ""}
+        {t("ui.versionLabel")} {entry.revision} · {entry.data.title}
+        {entry.archived ? t("ui.archived") : ""}
       </summary>
       {fields.map(([key, label, secret]) => {
         const value = entry.data.fields[key];
@@ -36,7 +36,7 @@ export function HistoryVersion({
                     setRevealed({ ...revealed, [key]: !revealed[key] })
                   }
                 >
-                  {revealed[key] ? t("Скрыть") : t("Показать")}
+                  {revealed[key] ? t("ui.hide") : t("ui.show")}
                 </button>
               )}
             </div>
@@ -45,13 +45,13 @@ export function HistoryVersion({
       })}
       {entry.data.notes && (
         <div className="field">
-          <small>{t("Заметки")}</small>
+          <small>{t("ui.notes")}</small>
           <p className="pre">{entry.data.notes}</p>
         </div>
       )}
       {entry.data.folder && (
         <p className="pre">
-          {t("Папка:")} <bdi>{entry.data.folder}</bdi>
+          {t("ui.folderLabel")} <bdi>{entry.data.folder}</bdi>
         </p>
       )}
       <div className="tags">
@@ -65,7 +65,7 @@ export function HistoryVersion({
         disabled={disabled}
         onClick={onRestore}
       >
-        {t("Восстановить новой версией")}
+        {t("ui.restoreAsNewVersion")}
       </button>
     </details>
   );
