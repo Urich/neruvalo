@@ -66,7 +66,7 @@ export function TypePicker({
         ref={trigger}
         type="button"
         disabled={disabled}
-        aria-label={t("Тип")}
+        aria-label={t("ui.type")}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
@@ -76,7 +76,7 @@ export function TypePicker({
         <span aria-hidden="true">▾</span>
       </button>
       {open && (
-        <div role="listbox" aria-label={t("Тип")} className="type-options">
+        <div role="listbox" aria-label={t("ui.type")} className="type-options">
           {Object.entries(types).map(([key, type]) => (
             <button
               type="button"

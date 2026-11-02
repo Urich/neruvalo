@@ -124,7 +124,7 @@ export function EntryTree({
                 tabIndex={-1}
                 className="tree-toggle"
                 aria-label={t(
-                  expanded ? "Свернуть группу" : "Развернуть группу",
+                  expanded ? "ui.collapseGroup" : "ui.expandGroup",
                 )}
                 onClick={() => toggle(node.key)}
               >
@@ -152,7 +152,7 @@ export function EntryTree({
                   {!!node.entry?.share_count && (
                     <span
                       className="shared-indicator"
-                      aria-label={t("С общим доступом")}
+                      aria-label={t("ui.sharedByMe")}
                     >
                       {" "}
                       · <Icon name="share" /> {node.entry.share_count}
@@ -161,10 +161,10 @@ export function EntryTree({
                 </strong>
                 <small>
                   {node.group
-                    ? t("Группа")
+                    ? t("ui.group")
                     : t(
                         types[node.entry!.data.record_type]?.label ??
-                          "Неизвестный тип",
+                          "ui.unknownType",
                       )}
                 </small>
               </span>
@@ -177,7 +177,7 @@ export function EntryTree({
       );
     });
   return (
-    <div role="tree" aria-label={t("Записи")} className="entry-tree" ref={ref}>
+    <div role="tree" aria-label={t("ui.entries")} className="entry-tree" ref={ref}>
       {render(nodes, 1)}
     </div>
   );

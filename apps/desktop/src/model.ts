@@ -26,83 +26,83 @@ export const types: Record<
   { label: string; icon: string; fields: [string, string, boolean, boolean?][] }
 > = {
   login: {
-    label: "Логин и пароль",
+    label: "ui.loginAndPassword",
     icon: "login",
     fields: [
-      ["login", "Логин", false],
-      ["password", "Пароль", true],
-      ["url", "Адрес сайта", false],
-      ["totp", "Секрет TOTP", true],
+      ["login", "ui.username", false],
+      ["password", "ui.password", true],
+      ["url", "ui.websiteAddress", false],
+      ["totp", "ui.totpSecret", true],
     ],
   },
   bank_card: {
-    label: "Банковская карта",
+    label: "ui.bankCard",
     icon: "bank_card",
     fields: [
-      ["number", "Номер карты", true],
-      ["holder", "Держатель", false],
-      ["expires", "Срок действия", false],
-      ["bank", "Банк", false],
-      ["network", "Платёжная система", false],
+      ["number", "ui.cardNumber", true],
+      ["holder", "ui.cardholder", false],
+      ["expires", "ui.expiry", false],
+      ["bank", "ui.bank", false],
+      ["network", "ui.cardNetwork", false],
       ["cvv", "CVV / CVC", true],
       ["pin", "PIN", true],
     ],
   },
-  note: { label: "Заметка", icon: "note", fields: [] },
+  note: { label: "ui.note", icon: "note", fields: [] },
   bank_account: {
-    label: "Банковский счёт",
+    label: "ui.bankAccount",
     icon: "bank_account",
     fields: [
-      ["holder", "Владелец", false],
-      ["number", "Номер счёта / IBAN", true],
-      ["bank", "Банк", false],
-      ["bic", "БИК", false],
+      ["holder", "ui.owner", false],
+      ["number", "ui.accountNumberIban", true],
+      ["bank", "ui.bank", false],
+      ["bic", "ui.bankIdentifier", false],
       ["swift", "SWIFT", false],
-      ["details", "Реквизиты", true, true],
+      ["details", "ui.bankDetails", true, true],
     ],
   },
   api_token: {
-    label: "API-ключ / токен",
+    label: "ui.apiKeyToken",
     icon: "api_token",
     fields: [
-      ["secret", "Ключ / токен", true],
-      ["service", "Сервис", false],
-      ["url", "Адрес", false],
-      ["expires", "Срок действия", false],
+      ["secret", "ui.keyToken", true],
+      ["service", "ui.service", false],
+      ["url", "ui.address", false],
+      ["expires", "ui.expiry", false],
     ],
   },
   ssh_key: {
-    label: "SSH-ключ",
+    label: "ui.sshKey",
     icon: "ssh_key",
     fields: [
-      ["private", "Приватный ключ", true, true],
-      ["public", "Публичный ключ", false, true],
-      ["passphrase", "Пароль ключа", true],
+      ["private", "ui.privateKey", true, true],
+      ["public", "ui.publicKey", false, true],
+      ["passphrase", "ui.keyPassphrase", true],
     ],
   },
   document: {
-    label: "Документ",
+    label: "ui.document",
     icon: "document",
     fields: [
-      ["kind", "Тип документа", false],
-      ["country", "Страна / организация", false],
-      ["number", "Номер", true],
-      ["holder", "Владелец", false],
-      ["issuer", "Кем выдан", false],
-      ["issued", "Дата выдачи", false],
-      ["expires", "Действует до", false],
+      ["kind", "ui.documentType", false],
+      ["country", "ui.countryOrganization", false],
+      ["number", "ui.number", true],
+      ["holder", "ui.owner", false],
+      ["issuer", "ui.issuedBy", false],
+      ["issued", "ui.issueDate", false],
+      ["expires", "ui.validUntil", false],
     ],
   },
   crypto_wallet: {
-    label: "Криптокошелёк",
+    label: "ui.cryptoWallet",
     icon: "crypto_wallet",
     fields: [
-      ["application", "Приложение / устройство", false],
-      ["network", "Сети", false],
-      ["addresses", "Публичные адреса", false, true],
-      ["seed", "Seed-фраза", true],
-      ["passphrase", "Дополнительная passphrase", true],
-      ["private_keys", "Приватные ключи", true, true],
+      ["application", "ui.applicationDevice", false],
+      ["network", "ui.networks", false],
+      ["addresses", "ui.publicAddresses", false, true],
+      ["seed", "ui.seedPhrase", true],
+      ["passphrase", "ui.additionalPassphrase", true],
+      ["private_keys", "ui.privateKeys", true, true],
     ],
   },
 };
@@ -134,44 +134,44 @@ export function filterEntries(
 export function errorText(error: unknown): string {
   const s = error instanceof Error ? error.message : String(error);
   if (s.includes("SHARING_VERSION_MISMATCH"))
-    return "Общий доступ изменён. Синхронизируйте устройства и повторите действие.";
+    return "ui.sharingHasChangedSynchronizeYourDevicesAndTryAgain";
   if (s.includes("ALREADY_SHARED"))
-    return "Доступ этому пользователю уже предоставлен.";
-  if (s.includes("ACCOUNT_NOT_FOUND")) return "Пользователь не найден.";
+    return "ui.thisUserAlreadyHasAccess";
+  if (s.includes("ACCOUNT_NOT_FOUND")) return "ui.userNotFound";
   if (s.includes("CANNOT_SHARE_WITH_SELF"))
-    return "Нельзя поделиться записью с самим собой.";
+    return "ui.youCannotShareAnEntryWithYourself";
   if (s.includes("GROUP_NOT_FOUND"))
-    return "Группа недоступна. Синхронизируйте устройства.";
-  if (s.includes("INVALID_GROUP")) return "Недопустимая структура групп.";
+    return "ui.groupUnavailableSynchronizeYourDevices";
+  if (s.includes("INVALID_GROUP")) return "ui.invalidGroupStructure";
   if (s.includes("GROUP_OPERATION_REQUIRED"))
-    return "Для группы требуется отдельное действие.";
+    return "ui.useAGroupSpecificAction";
   if (s.includes("SERVER_PIN_MISMATCH"))
-    return "Этот аккаунт или сертификат относится к другому серверу.";
+    return "ui.thisAccountOrRecoveryFileBelongsToAnotherServer";
   if (s.includes("ACCOUNT_EXISTS"))
-    return "Аккаунт с таким логином или email уже существует.";
+    return "ui.anAccountWithThisUsernameOrEmailAlreadyExists";
   if (s.includes("INVALID_EMAIL_CODE"))
-    return "Неверный или просроченный код подтверждения.";
+    return "ui.invalidOrExpiredVerificationCode";
   if (s.includes("RATE_LIMITED"))
-    return "Слишком много запросов. Повторите позже.";
+    return "ui.tooManyRequestsTryAgainLater";
   if (
     s.includes("SERVER_ID_CHANGED") ||
     s.includes("SERVER_KEY_CHANGED") ||
     s.includes("PUBLIC_KEY_MISMATCH") ||
     s.includes("ACCOUNT_CHANGED")
   )
-    return "Сервер или ключи аккаунта изменились. Вход остановлен.";
+    return "ui.serverIdentityOrAccountKeysChangedSignInStopped";
   if (s.includes("UNSUPPORTED_"))
-    return "Версия сервера или данных не поддерживается.";
+    return "ui.serverOrDataVersionIsNotSupported";
   if (s.includes("RECORD_VERSION_MISMATCH"))
-    return "Запись изменена на другом устройстве. Синхронизируйте устройства.";
+    return "ui.thisEntryWasChangedOnAnotherDeviceSynchronizeYourDevices";
   if (s.includes("SYNCHRONIZATION_REQUIRED"))
-    return "Перед сохранением синхронизируйте устройства и заново откройте запись.";
+    return "ui.synchronizeAndReopenTheEntryBeforeSaving";
   if (s.includes("AUTH_FAILED"))
-    return "Не удалось подтвердить вход. Проверьте логин и мастер-пароль.";
+    return "ui.signInFailedCheckYourUsernameAndPassword";
   if (s.includes("OFFLINE_READ_ONLY"))
-    return "Офлайн доступен только просмотр.";
-  if (s.includes("LOCKED")) return "Хранилище заблокировано.";
+    return "ui.offlineAccessIsReadOnly";
+  if (s.includes("LOCKED")) return "ui.vaultIsLocked";
   return /^[A-Z][A-Z_]{3,}$/.test(s)
-    ? "Операция не выполнена. Проверьте соединение и повторите."
+    ? "ui.operationFailedCheckYourConnectionAndTryAgain"
     : s;
 }

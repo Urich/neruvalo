@@ -64,24 +64,24 @@ export function ShareDialog({
         if (!working) onClose();
       }}
     >
-      <h2 id="share-title">{t("Поделиться")}</h2>
+      <h2 id="share-title">{t("ui.share")}</h2>
       <p>
         <bdi>{title}</bdi>
       </p>
       <p>
         {t(
-          "Получатель увидит все поля и заметки. Ваши группы и теги не передаются.",
+          "ui.theRecipientWillSeeAllFieldsAndNotesYourGroupsAndTagsAreExcluded",
         )}
       </p>
       {wallet && (
         <p role="alert">
           {t(
-            "Seed-фраза и приватные ключи позволяют управлять средствами кошелька.",
+            "ui.seedPhrasesAndPrivateKeysGiveControlOverWalletFunds",
           )}
         </p>
       )}
       <label>
-        {t("Логин получателя")}
+        {t("ui.recipientLogin")}
         <input
           value={login}
           disabled={working || disabled}
@@ -99,7 +99,7 @@ export function ShareDialog({
           void run(async () => setTarget(await onResolve(login.trim())));
         }}
       >
-        {t("Проверить получателя")}
+        {t("ui.verifyRecipient")}
       </button>
       {target && (
         <div className="share-recipient">
@@ -109,13 +109,13 @@ export function ShareDialog({
           <p>
             <code>{target.fingerprint}</code>
           </p>
-          <p>{t("Публичные ключи получателя")}:</p>
+          <p>{t("ui.recipientPublicKeys")}:</p>
           <code>{target.public_sign}</code>
           <br />
           <code>{target.public_share}</code>
           <p>
             {t(
-              "Сверьте ключи с получателем по независимому каналу при необходимости.",
+              "ui.compareKeysWithTheRecipientThroughAnIndependentChannelIfNeeded",
             )}
           </p>
           <button
@@ -129,11 +129,11 @@ export function ShareDialog({
               });
             }}
           >
-            {t("Подтвердить передачу")}
+            {t("ui.confirmSharing")}
           </button>
         </div>
       )}
-      <h3>{t("Действующие получатели")}</h3>
+      <h3>{t("ui.activeRecipients")}</h3>
       {recipients.map((r) => (
         <div className="share-recipient" key={r.share_id}>
           <bdi>{r.recipient_login}</bdi>
@@ -144,15 +144,15 @@ export function ShareDialog({
               void run(() => onRevoke(r.share_id));
             }}
           >
-            {t("Отозвать доступ")}
+            {t("ui.revokeAccess")}
           </button>
         </div>
       ))}
-      {!recipients.length && <p>{t("Доступ пока никому не предоставлен.")}</p>}
+      {!recipients.length && <p>{t("ui.noOneHasAccessYet")}</p>}
       {error && <p role="alert">{error}</p>}
       <div className="discard-actions">
         <button className="secondary" disabled={working} onClick={onClose}>
-          {t("Закрыть")}
+          {t("ui.close")}
         </button>
       </div>
     </dialog>
