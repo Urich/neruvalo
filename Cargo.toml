@@ -16,7 +16,7 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "any", "sqlite", "postgres"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "socks"] }
 zeroize = { version = "1", features = ["derive"] }
 base64 = "0.22"
 sha2 = "0.10"

@@ -642,6 +642,7 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
         .as_str()
         .unwrap()
         .to_owned();
+    assert!(copy_id.starts_with("shared:"));
     let share_id = received["incoming"][0]["share_id"]
         .as_str()
         .unwrap()
@@ -674,6 +675,7 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
         .await
         .unwrap();
     assert!(bob.sync().await.is_err());
+    assert!(owner.sync().await.is_err());
     assert_eq!(
         bob.sharing().await.unwrap()["incoming"][0]["data"]["fields"]["password"],
         "old-secret"
@@ -685,6 +687,7 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
         .await
         .unwrap();
     bob.sync().await.unwrap();
+    owner.sync().await.unwrap();
     db.close().await;
     assert!(bob.history(&id).await.unwrap().is_empty());
     assert!(bob.history(&copy_id).await.unwrap().is_empty());

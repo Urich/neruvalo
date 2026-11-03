@@ -43,13 +43,15 @@ type Status = {
   profile?: string;
   timeout_seconds?: number;
 };
-async function call<T = any>(
-  action: string,
-  args: Record<string, unknown> = {},
-): Promise<T> {
-  return invoke("command", { request: { action, ...args } });
-}
 export default function App() {
+  async function call<T = any>(
+    action: string,
+    args: Record<string, unknown> = {},
+  ): Promise<T> {
+    return invoke("command", {
+      request: { action, expected_profile: status.profile, ...args },
+    });
+  }
   const { t, language } = useI18n();
   const [generator, setGenerator] = useState(() =>
     normalizeGenerator(readLocal("neruvalo.generator", null)),
@@ -185,9 +187,9 @@ export default function App() {
       return;
     }
     const [list, groups, sharing] = await Promise.all([
-      call<Entry[]>("list"),
-      call<Group[]>("groups"),
-      call("sharing"),
+      call<Entry[]>("list", { expected_profile: s.profile }),
+      call<Group[]>("groups", { expected_profile: s.profile }),
+      call("sharing", { expected_profile: s.profile }),
     ]);
     if (epoch !== generation.current) return;
     wasUnlocked.current = true;
@@ -275,7 +277,7 @@ export default function App() {
       window.removeEventListener("pointerdown", touch);
       window.removeEventListener("pointermove", touch);
     };
-  }, [status.unlocked]);
+  }, [status.unlocked, status.profile]);
   function requestLeave(action: () => void) {
     setMenu(null);
     if (draft || groupDraft) {
@@ -1031,6 +1033,10 @@ export default function App() {
             <About />
           ) : page === "settings" ? (
             <Settings
+              loadProxy={() => call("proxy_settings")}
+              saveProxy={async (settings) => {
+                await call("set_proxy", { settings });
+              }}
               generator={generator}
               onGenerator={(value) => {
                 setGenerator(value);

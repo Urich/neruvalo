@@ -64,6 +64,8 @@ jobs:
         run: cargo build --locked -p neruvalo-desktop --features desktop,custom-protocol
       - name: Build server and console client
         run: cargo build --locked -p neruvalo-server -p neruvalo-client
+      - name: Windows proxy and DPAPI tests
+        run: cargo test --locked -p neruvalo-client --lib
       - name: Windows end-to-end tests
         run: cargo test --locked -p neruvalo-client --test end_to_end -- --test-threads=1
       - name: Check Windows server startup

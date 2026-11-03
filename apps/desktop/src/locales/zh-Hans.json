@@ -259,5 +259,19 @@
   "ui.sharingHasChangedSynchronizeYourDevicesAndTryAgain": "共享访问已更改。请同步设备后重试。",
   "ui.thisUserAlreadyHasAccess": "此用户已获得访问权限。",
   "ui.userNotFound": "未找到用户。",
-  "ui.youCannotShareAnEntryWithYourself": "不能将条目分享给自己。"
+  "ui.youCannotShareAnEntryWithYourself": "不能将条目分享给自己。",
+  "ui.proxy": "代理",
+  "ui.settingsAreSavedOnlyOnThisDeviceAndAreNotSentToTheServer": "设置仅保存在此设备上，不会发送到服务器。",
+  "ui.serverConnection": "服务器连接",
+  "ui.automatic": "自动",
+  "ui.noProxy": "不使用代理",
+  "ui.manualProxy": "手动指定代理",
+  "ui.proxyAddress": "代理地址",
+  "ui.proxyUsername": "代理用户名",
+  "ui.proxyPassword": "代理密码",
+  "ui.onWindowsProxySettingsAndPasswordAreProtectedByTheCurrentUserSDPAPI": "在 Windows 上，代理设置和密码由当前用户的 DPAPI 保护。",
+  "ui.saveProxy": "保存代理",
+  "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "代理设置已保存，将应用于后续请求。",
+  "ui.couldNotLoadProxySettings": "无法加载代理设置。",
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "无法保存代理设置。请检查代理地址和类型。"
 }

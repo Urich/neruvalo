@@ -259,5 +259,19 @@
   "ui.sharingHasChangedSynchronizeYourDevicesAndTryAgain": "Общий доступ изменён. Синхронизируйте устройства и повторите действие.",
   "ui.thisUserAlreadyHasAccess": "Доступ этому пользователю уже предоставлен.",
   "ui.userNotFound": "Пользователь не найден.",
-  "ui.youCannotShareAnEntryWithYourself": "Нельзя поделиться записью с самим собой."
+  "ui.youCannotShareAnEntryWithYourself": "Нельзя поделиться записью с самим собой.",
+  "ui.proxy": "Прокси",
+  "ui.settingsAreSavedOnlyOnThisDeviceAndAreNotSentToTheServer": "Настройки сохраняются только на этом устройстве и не отправляются серверу.",
+  "ui.serverConnection": "Подключение к серверу",
+  "ui.automatic": "Автоматически",
+  "ui.noProxy": "Без прокси",
+  "ui.manualProxy": "Указать прокси",
+  "ui.proxyAddress": "Адрес прокси",
+  "ui.proxyUsername": "Логин прокси",
+  "ui.proxyPassword": "Пароль прокси",
+  "ui.onWindowsProxySettingsAndPasswordAreProtectedByTheCurrentUserSDPAPI": "В Windows настройки и пароль прокси защищены DPAPI текущего пользователя.",
+  "ui.saveProxy": "Сохранить прокси",
+  "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "Настройки прокси сохранены. Они применятся к следующим запросам.",
+  "ui.couldNotLoadProxySettings": "Не удалось загрузить настройки прокси.",
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Не удалось сохранить настройки прокси. Проверьте адрес и тип прокси."
 }

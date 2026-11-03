@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { empty, filterEntries, errorText, Entry, types } from "./model";
 describe("vault view rules", () => {
+  it("returns a translation key for invalid proxy settings", () => {
+    expect(errorText(new Error("INVALID_PROXY_CONFIG"))).toBe(
+      "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType",
+    );
+  });
   it("never exposes archived entries in the active list", () => {
     const a: Entry = {
       record_id: "a",
