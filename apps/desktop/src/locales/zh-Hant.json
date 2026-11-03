@@ -259,5 +259,19 @@
   "ui.sharingHasChangedSynchronizeYourDevicesAndTryAgain": "共用存取已變更。請同步裝置後重試。",
   "ui.thisUserAlreadyHasAccess": "此使用者已有存取權。",
   "ui.userNotFound": "找不到使用者。",
-  "ui.youCannotShareAnEntryWithYourself": "不能將項目分享給自己。"
+  "ui.youCannotShareAnEntryWithYourself": "不能將項目分享給自己。",
+  "ui.proxy": "代理",
+  "ui.settingsAreSavedOnlyOnThisDeviceAndAreNotSentToTheServer": "設定僅儲存在此裝置上，不會傳送至伺服器。",
+  "ui.serverConnection": "伺服器連線",
+  "ui.automatic": "自動",
+  "ui.noProxy": "不使用代理",
+  "ui.manualProxy": "手動指定代理",
+  "ui.proxyAddress": "代理位址",
+  "ui.proxyUsername": "代理使用者名稱",
+  "ui.proxyPassword": "代理密碼",
+  "ui.onWindowsProxySettingsAndPasswordAreProtectedByTheCurrentUserSDPAPI": "在 Windows 上，代理設定和密碼由目前使用者的 DPAPI 保護。",
+  "ui.saveProxy": "儲存代理",
+  "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "代理設定已儲存，將套用於後續請求。",
+  "ui.couldNotLoadProxySettings": "無法載入代理設定。",
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "無法儲存代理設定。請檢查代理位址和類型。"
 }

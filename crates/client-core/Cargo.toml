@@ -21,3 +21,6 @@ rpassword = "7"
 neruvalo-server.workspace = true
 tempfile = "3"
 axum = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

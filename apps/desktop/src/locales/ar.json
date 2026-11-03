@@ -259,5 +259,19 @@
   "ui.sharingHasChangedSynchronizeYourDevicesAndTryAgain": "تغيرت المشاركة. زامن أجهزتك وحاول مجددًا.",
   "ui.thisUserAlreadyHasAccess": "هذا المستخدم لديه وصول بالفعل.",
   "ui.userNotFound": "لم يُعثر على المستخدم.",
-  "ui.youCannotShareAnEntryWithYourself": "لا يمكنك مشاركة سجل مع نفسك."
+  "ui.youCannotShareAnEntryWithYourself": "لا يمكنك مشاركة سجل مع نفسك.",
+  "ui.proxy": "الوكيل",
+  "ui.settingsAreSavedOnlyOnThisDeviceAndAreNotSentToTheServer": "تُحفظ الإعدادات على هذا الجهاز فقط ولا تُرسل إلى الخادم.",
+  "ui.serverConnection": "الاتصال بالخادم",
+  "ui.automatic": "تلقائي",
+  "ui.noProxy": "دون وكيل",
+  "ui.manualProxy": "وكيل يدوي",
+  "ui.proxyAddress": "عنوان الوكيل",
+  "ui.proxyUsername": "اسم مستخدم الوكيل",
+  "ui.proxyPassword": "كلمة مرور الوكيل",
+  "ui.onWindowsProxySettingsAndPasswordAreProtectedByTheCurrentUserSDPAPI": "في Windows تحمي DPAPI للمستخدم الحالي إعدادات الوكيل وكلمة مروره.",
+  "ui.saveProxy": "حفظ الوكيل",
+  "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "حُفظت إعدادات الوكيل. ستُطبق على الطلبات التالية.",
+  "ui.couldNotLoadProxySettings": "تعذر تحميل إعدادات الوكيل.",
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "تعذر حفظ إعدادات الوكيل. تحقق من العنوان ونوع الوكيل."
 }

@@ -133,6 +133,8 @@ export function filterEntries(
 }
 export function errorText(error: unknown): string {
   const s = error instanceof Error ? error.message : String(error);
+  if (s.includes("INVALID_PROXY_CONFIG"))
+    return "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType";
   if (s.includes("SHARING_VERSION_MISMATCH"))
     return "ui.sharingHasChangedSynchronizeYourDevicesAndTryAgain";
   if (s.includes("ALREADY_SHARED"))

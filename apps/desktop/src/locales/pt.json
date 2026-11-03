@@ -259,5 +259,19 @@
   "ui.sharingHasChangedSynchronizeYourDevicesAndTryAgain": "O compartilhamento mudou. Sincronize seus dispositivos e tente novamente.",
   "ui.thisUserAlreadyHasAccess": "Este usuário já tem acesso.",
   "ui.userNotFound": "Usuário não encontrado.",
-  "ui.youCannotShareAnEntryWithYourself": "Você não pode compartilhar uma entrada consigo mesmo."
+  "ui.youCannotShareAnEntryWithYourself": "Você não pode compartilhar uma entrada consigo mesmo.",
+  "ui.proxy": "Proxy",
+  "ui.settingsAreSavedOnlyOnThisDeviceAndAreNotSentToTheServer": "As configurações são salvas apenas neste dispositivo e não são enviadas ao servidor.",
+  "ui.serverConnection": "Conexão com o servidor",
+  "ui.automatic": "Automático",
+  "ui.noProxy": "Sem proxy",
+  "ui.manualProxy": "Proxy manual",
+  "ui.proxyAddress": "Endereço do proxy",
+  "ui.proxyUsername": "Usuário do proxy",
+  "ui.proxyPassword": "Senha do proxy",
+  "ui.onWindowsProxySettingsAndPasswordAreProtectedByTheCurrentUserSDPAPI": "No Windows, a DPAPI do usuário atual protege as configurações e a senha do proxy.",
+  "ui.saveProxy": "Salvar proxy",
+  "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "Configurações do proxy salvas. Serão aplicadas às próximas solicitações.",
+  "ui.couldNotLoadProxySettings": "Não foi possível carregar as configurações do proxy.",
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Não foi possível salvar as configurações. Verifique o endereço e o tipo do proxy."
 }

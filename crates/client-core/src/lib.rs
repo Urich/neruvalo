@@ -18,8 +18,10 @@ use std::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 mod groups;
+mod proxy;
 mod sharing;
 pub use groups::GroupView;
+pub use proxy::ProxySettings;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Profile {
@@ -258,12 +260,10 @@ impl Client {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         }
+        let (_, http) = proxy::load(&dir)?;
         Ok(Self {
             dir,
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
+            http,
             active: None,
             pending: None,
             certificate: None,

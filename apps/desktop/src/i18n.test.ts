@@ -26,8 +26,11 @@ describe("bundled language catalogs", () => {
       expect(Object.values(catalog).every((v) => v.trim().length > 0)).toBe(
         true,
       );
+      expect(Object.keys(catalog).every((key) => key.startsWith("ui."))).toBe(true);
     }
     expect(translate("ui.password", "ja")).toBe("パスワード");
     expect(translate("ui.password", "unsupported")).toBe("Password");
+    expect(translate("ui.proxy", "en")).toBe("Proxy");
+    expect(translate("ui.proxy", "ru")).toBe("Прокси");
   });
 });

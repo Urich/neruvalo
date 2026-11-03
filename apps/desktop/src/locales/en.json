@@ -259,5 +259,19 @@
   "ui.sharingHasChangedSynchronizeYourDevicesAndTryAgain": "Sharing has changed. Synchronize your devices and try again.",
   "ui.thisUserAlreadyHasAccess": "This user already has access.",
   "ui.userNotFound": "User not found.",
-  "ui.youCannotShareAnEntryWithYourself": "You cannot share an entry with yourself."
+  "ui.youCannotShareAnEntryWithYourself": "You cannot share an entry with yourself.",
+  "ui.proxy": "Proxy",
+  "ui.settingsAreSavedOnlyOnThisDeviceAndAreNotSentToTheServer": "Settings are saved only on this device and are not sent to the server.",
+  "ui.serverConnection": "Server connection",
+  "ui.automatic": "Automatic",
+  "ui.noProxy": "No proxy",
+  "ui.manualProxy": "Manual proxy",
+  "ui.proxyAddress": "Proxy address",
+  "ui.proxyUsername": "Proxy username",
+  "ui.proxyPassword": "Proxy password",
+  "ui.onWindowsProxySettingsAndPasswordAreProtectedByTheCurrentUserSDPAPI": "On Windows, proxy settings and password are protected by the current user’s DPAPI.",
+  "ui.saveProxy": "Save proxy",
+  "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "Proxy settings saved. They apply to subsequent requests.",
+  "ui.couldNotLoadProxySettings": "Could not load proxy settings.",
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Could not save proxy settings. Check the proxy address and type."
 }
