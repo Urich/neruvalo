@@ -1,4 +1,7 @@
 {
+  "ui.verifyIdentity": "Benutzerüberprüfung",
+  "ui.completeVerificationToContinue": "Schließe die Prüfung ab, um fortzufahren.",
+  "ui.verificationContinuesAutomatically": "Danach geht es automatisch weiter.",
   "ui.copied": "Kopiert.",
   "ui.undo": "Rückgängig",
   "ui.redo": "Wiederholen",

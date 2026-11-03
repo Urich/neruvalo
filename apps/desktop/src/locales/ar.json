@@ -1,4 +1,7 @@
 {
+  "ui.verifyIdentity": "التحقق من المستخدم",
+  "ui.completeVerificationToContinue": "أكمل التحقق للمتابعة.",
+  "ui.verificationContinuesAutomatically": "سنتابع تلقائيًا عند الانتهاء.",
   "ui.copied": "تم النسخ.",
   "ui.undo": "تراجع",
   "ui.redo": "إعادة",

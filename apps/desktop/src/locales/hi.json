@@ -1,4 +1,7 @@
 {
+  "ui.verifyIdentity": "उपयोगकर्ता सत्यापन",
+  "ui.completeVerificationToContinue": "जारी रखने के लिए सत्यापन पूरा करें।",
+  "ui.verificationContinuesAutomatically": "पूरा होने पर हम अपने आप आगे बढ़ेंगे।",
   "ui.copied": "कॉपी किया गया।",
   "ui.undo": "पूर्ववत करें",
   "ui.redo": "फिर करें",

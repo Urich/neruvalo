@@ -1,0 +1,41 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Neruvalo — проверка</title>
+<style>
+:root{font-family:Inter,"Segoe UI",sans-serif;color:#233d36;background:#f8f9f6;font-size:14px;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0;padding:24px}main{max-width:500px;margin:0 auto;padding:24px;background:#fff;border:1px solid #dce3dd;border-radius:14px}h1{font-size:22px;margin:0 0 24px}p{line-height:1.6}#status{font-size:12px;color:#61746b;margin:16px 0 0}#status[data-error]{color:#a23f35}
+button{font:inherit;cursor:pointer;padding:11px 18px;border:0;border-radius:9px;background:#285e48;color:#fff;font-weight:600}button:hover{filter:brightness(.96)}button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible{outline:3px solid #8bb7a1;outline-offset:2px}
+#verification>p:first-child{margin-top:0;font-weight:600}#verification>img{display:block;margin:12px auto 20px;background:#f8f9f6;border:1px solid #e5ebe5;padding:6px}#verification>div{max-width:none!important}#verification>button{width:100%}
+#verification button[aria-pressed]{border-color:#e5ebe5!important;background:#f8f9f6!important;transition:border-color .12s,box-shadow .12s}#verification button[aria-pressed="true"]{border-color:#285e48!important;box-shadow:0 0 0 2px #dfece2}#verification button[aria-pressed]:hover{border-color:#8bb7a1!important}
+html.embedded{background:#fff}html.embedded body{padding:20px 24px}html.embedded main{padding:0;border:0;max-width:none}html.embedded h1{display:none}
+@media(max-width:380px){body,html.embedded body{padding:16px}main{padding:16px}}
+</style>
+<main><h1>Проверка Neruvalo</h1><div id="verification"></div><p id="status" role="status">Подготовка…</p></main><script type="module">
+import {verifyWebsiteAttempt} from '/verification/widget.js';
+const params = new URLSearchParams(location.search);
+const ru = (params.get('lang') || 'ru').startsWith('ru');
+document.documentElement.lang = ru ? 'ru' : 'en';
+if(params.get('embedded') === '1') document.documentElement.classList.add('embedded');
+const secret = location.hash.slice(1); history.replaceState(null, '', location.pathname);
+const headers = {Authorization:`Bearer ${secret}`, 'Content-Type':'application/json'};
+const status = document.querySelector('#status');
+status.textContent = ru ? 'Подготовка…' : 'Preparing…';
+// Localize the vendored widget's controls without changing its verification logic.
+const labels = {'Confirm verification':'Продолжить','Confirm selection':'Подтвердить выбор','Checking request…':'Проверяем…','Checking request...':'Проверяем…','Request checked':'Проверка пройдена','Check failed. Please try again.':'Не удалось пройти проверку. Повторите попытку.'};
+if(ru) new MutationObserver(() => {
+  for(const node of document.querySelectorAll('#verification button, #verification')) {
+    if(node.childNodes.length === 1 && node.firstChild.nodeType === Node.TEXT_NODE && labels[node.textContent]) node.textContent = labels[node.textContent];
+  }
+}).observe(document.querySelector('#verification'), {childList:true, subtree:true, characterData:true});
+try {
+  const r = await fetch('/api/v1/verification', {headers, cache:'no-store'});
+  if (!r.ok) throw Error(ru ? 'Проверка истекла. Повторите действие в приложении.' : 'Verification expired. Try again in the app.');
+  const p = await r.json();
+  if (!p.verified) {
+    status.textContent = ru ? 'Пройдите проверку выше.' : 'Complete the check above.';
+    const result = await verifyWebsiteAttempt(document.querySelector('#verification'), p.attempt, {serviceURL:p.service_url});
+    if (!result.verification_token) throw Error(ru ? 'Проверка не завершена' : 'Verification incomplete');
+    const done = await fetch('/api/v1/verification', {method:'POST', headers, body:JSON.stringify({verification_token:result.verification_token})});
+    if (!done.ok) throw Error(ru ? 'Не удалось подтвердить проверку' : 'Could not confirm verification');
+  }
+  status.textContent = ru ? 'Готово. Продолжаем…' : 'Done. Continuing…';
+} catch(e) { status.dataset.error = ''; status.textContent = e.message; }
+</script></html>

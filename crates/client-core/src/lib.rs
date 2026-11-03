@@ -20,6 +20,8 @@ use zeroize::Zeroizing;
 mod groups;
 mod proxy;
 mod sharing;
+#[cfg(test)]
+mod verification_tests;
 pub use groups::GroupView;
 pub use proxy::ProxySettings;
 
@@ -138,7 +140,14 @@ pub struct Client {
     active: Option<Unlocked>,
     pending: Option<Pending>,
     certificate: Option<Zeroizing<String>>,
+    verification_opener: Option<VerificationOpener>,
 }
+/// A verification view lives until the request completes, fails, or is cancelled.
+/// Implementations should close their view when dropped.
+pub trait VerificationView: Send + Sync {
+    fn is_closed(&self) -> bool;
+}
+pub type VerificationOpener = Box<dyn Fn(&str) -> Result<Box<dyn VerificationView>> + Send + Sync>;
 #[derive(Serialize)]
 pub struct ViewRecord {
     pub record_id: String,
@@ -204,6 +213,80 @@ async fn response<T: serde::de::DeserializeOwned>(r: reqwest::Response) -> Resul
     }
     Ok(serde_json::from_slice(&bytes)?)
 }
+async fn verified_send(
+    request: reqwest::RequestBuilder,
+    http: &reqwest::Client,
+    opener: Option<&VerificationOpener>,
+) -> Result<reqwest::Response> {
+    let retry = request
+        .try_clone()
+        .ok_or_else(|| anyhow!("REQUEST_NOT_REPLAYABLE"))?;
+    let r = request.send().await?;
+    if r.status() != reqwest::StatusCode::PRECONDITION_REQUIRED {
+        return Ok(r);
+    }
+    let origin = r.url().origin().ascii_serialization();
+    let body: Value = r.json().await?;
+    ensure!(
+        body.pointer("/error/code").and_then(Value::as_str) == Some("VERIFICATION_REQUIRED"),
+        "SERVER_ERROR"
+    );
+    let secret = body["verification_secret"]
+        .as_str()
+        .ok_or_else(|| anyhow!("INVALID_VERIFICATION"))?;
+    ensure!(
+        secret.len() == 43
+            && secret
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+        "INVALID_VERIFICATION"
+    );
+    let url = format!("{origin}/verification#{secret}");
+    let view = if let Some(open) = opener {
+        Some(open(&url)?)
+    } else {
+        open_verification_browser(&url)?;
+        None
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    while tokio::time::Instant::now() < deadline {
+        ensure!(
+            !view.as_ref().is_some_and(|v| v.is_closed()),
+            "VERIFICATION_CANCELLED"
+        );
+        let status: Value = response(
+            http.get(format!("{origin}/api/v1/verification"))
+                .bearer_auth(secret)
+                .send()
+                .await?,
+        )
+        .await?;
+        ensure!(
+            !view.as_ref().is_some_and(|v| v.is_closed()),
+            "VERIFICATION_CANCELLED"
+        );
+        if status["verified"] == true {
+            drop(view);
+            return Ok(retry
+                .header("x-neruvalo-verification", secret)
+                .send()
+                .await?);
+        }
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+    }
+    bail!("VERIFICATION_EXPIRED")
+}
+fn open_verification_browser(url: &str) -> Result<()> {
+    #[cfg(windows)]
+    std::process::Command::new("explorer.exe")
+        .arg(url)
+        .spawn()?;
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(url).spawn()?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    std::process::Command::new("xdg-open").arg(url).spawn()?;
+    Ok(())
+}
 /// Build a SQLite URL without interpreting a Windows drive as a URL authority.
 /// Encoding the entire filename also preserves Unicode, spaces, `%`, `#` and `?`.
 pub fn sqlite_database_url(path: &Path) -> Result<String> {
@@ -267,7 +350,11 @@ impl Client {
             active: None,
             pending: None,
             certificate: None,
+            verification_opener: None,
         })
+    }
+    pub fn set_verification_opener(&mut self, opener: VerificationOpener) {
+        self.verification_opener = Some(opener);
     }
     pub fn lock(&mut self) {
         self.active = None;
@@ -368,15 +455,18 @@ impl Client {
         let start = ClientRegistration::<Suite>::start(&mut OsRng, password.as_bytes())
             .map_err(|_| anyhow!("OPAQUE_START_FAILED"))?;
         let challenge: RegisterChallenge = response(
-            self.http
-                .post(format!("{server}/api/v1/register/begin"))
-                .json(&RegisterBegin {
-                    login: login.into(),
-                    email: email.into(),
-                    message: b64(start.message.serialize()),
-                })
-                .send()
-                .await?,
+            verified_send(
+                self.http
+                    .post(format!("{server}/api/v1/register/begin"))
+                    .json(&RegisterBegin {
+                        login: login.into(),
+                        email: email.into(),
+                        message: b64(start.message.serialize()),
+                    }),
+                &self.http,
+                self.verification_opener.as_ref(),
+            )
+            .await?,
         )
         .await?;
         ensure!(challenge.server_id == info.server_id, "SERVER_ID_CHANGED");
@@ -464,11 +554,14 @@ impl Client {
             .ok_or_else(|| anyhow!("NO_PENDING_REGISTRATION"))?;
         p.finish.email_code = code.trim().into();
         let result: Value = response(
-            self.http
-                .post(format!("{server}/api/v1/register/finish"))
-                .json(&p.finish)
-                .send()
-                .await?,
+            verified_send(
+                self.http
+                    .post(format!("{server}/api/v1/register/finish"))
+                    .json(&p.finish),
+                &self.http,
+                self.verification_opener.as_ref(),
+            )
+            .await?,
         )
         .await?;
         self.certificate = self.pending.take().and_then(|p| p.certificate);
@@ -508,31 +601,47 @@ impl Client {
         let start = ClientLogin::<Suite>::start(&mut OsRng, password.as_bytes())
             .map_err(|_| anyhow!("OPAQUE_START_FAILED"))?;
         let challenge: LoginChallenge = response(
-            self.http
-                .post(format!("{server}/api/v1/auth/begin"))
-                .json(&LoginBegin {
-                    login: login.into(),
-                    message: b64(start.message.serialize()),
-                })
-                .send()
-                .await?,
+            verified_send(
+                self.http
+                    .post(format!("{server}/api/v1/auth/begin"))
+                    .json(&LoginBegin {
+                        login: login.into(),
+                        message: b64(start.message.serialize()),
+                    }),
+                &self.http,
+                self.verification_opener.as_ref(),
+            )
+            .await?,
         )
         .await?;
         let kdf = crypto::kdf();
-        let finish = start
-            .state
-            .finish(
-                &mut OsRng,
-                password.as_bytes(),
-                CredentialResponse::deserialize(&unb64(&challenge.message)?)
-                    .map_err(|_| anyhow!("INVALID_OPAQUE_MESSAGE"))?,
-                ClientLoginFinishParameters::new(
-                    Some(b"neruvalo-login-v1"),
-                    opaque_ids(&challenge.account_id, &info.server_id),
-                    Some(&kdf),
-                ),
-            )
-            .map_err(|_| anyhow!("AUTH_FAILED"))?;
+        let finish = start.state.finish(
+            &mut OsRng,
+            password.as_bytes(),
+            CredentialResponse::deserialize(&unb64(&challenge.message)?)
+                .map_err(|_| anyhow!("INVALID_OPAQUE_MESSAGE"))?,
+            ClientLoginFinishParameters::new(
+                Some(b"neruvalo-login-v1"),
+                opaque_ids(&challenge.account_id, &info.server_id),
+                Some(&kdf),
+            ),
+        );
+        let finish = match finish {
+            Ok(finish) => finish,
+            Err(_) => {
+                // Finish this one-use server attempt even when OPAQUE rejects locally.
+                let _ = self
+                    .http
+                    .post(format!("{server}/api/v1/auth/finish"))
+                    .json(&LoginFinish {
+                        ticket: challenge.ticket.clone(),
+                        message: String::new(),
+                    })
+                    .send()
+                    .await;
+                bail!("AUTH_FAILED");
+            }
+        };
         let id = crypto::digest(&format!("{}:{}", info.server_id, challenge.account_id));
         let path = self.dir.join(&id).join("profile.json");
         let public = b64(finish.server_s_pk.serialize());

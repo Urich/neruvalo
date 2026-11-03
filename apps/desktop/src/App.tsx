@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HistoryVersion } from "./HistoryVersion";
 import { ConfirmNewEntry } from "./ConfirmNewEntry";
+import { VerificationDialog } from "./VerificationDialog";
 import { useI18n, setSystemLocale } from "./i18n";
 import { Icon } from "./Icon";
 import { ArchiveDialog } from "./ArchiveDialog";
@@ -764,6 +765,7 @@ export default function App() {
           context(e);
       }}
     >
+      <VerificationDialog />
       {archiveRequest && status.unlocked && (
         <ArchiveDialog
           request={archiveRequest}

@@ -1,4 +1,7 @@
 {
+  "ui.verifyIdentity": "用户验证",
+  "ui.completeVerificationToContinue": "请完成验证以继续。",
+  "ui.verificationContinuesAutomatically": "完成后将自动继续。",
   "ui.copied": "已复制。",
   "ui.undo": "撤销",
   "ui.redo": "重做",
