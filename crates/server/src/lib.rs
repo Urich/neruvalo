@@ -1,4 +1,5 @@
 mod sharing;
+mod verification;
 use anyhow::{ensure, Context};
 use axum::{
     extract::{DefaultBodyLimit, Path, State},
@@ -42,6 +43,7 @@ struct PendingLogin {
     registration_hash: String,
     state: ServerLogin<Suite>,
     expires: i64,
+    verification: Option<verification::Proof>,
 }
 struct PendingRecovery {
     account: String,
@@ -59,6 +61,7 @@ pub struct AppState {
     logins: Mutex<HashMap<String, PendingLogin>>,
     recoveries: Mutex<HashMap<String, PendingRecovery>>,
     attempts: Mutex<HashMap<String, (i64, u32)>>,
+    verification: Option<verification::Gate>,
 }
 #[derive(Debug)]
 struct ApiError(StatusCode, &'static str);
@@ -101,6 +104,13 @@ fn login_valid(s: &str) -> bool {
 }
 
 pub async fn application(url: &str, outbox: PathBuf) -> anyhow::Result<Router> {
+    application_with_gate(url, outbox, verification::Gate::from_env()?).await
+}
+async fn application_with_gate(
+    url: &str,
+    outbox: PathBuf,
+    gate: Option<verification::Gate>,
+) -> anyhow::Result<Router> {
     sqlx::any::install_default_drivers();
     let pool = AnyPoolOptions::new()
         .max_connections(5)
@@ -165,6 +175,7 @@ pub async fn application(url: &str, outbox: PathBuf) -> anyhow::Result<Router> {
         logins: Mutex::default(),
         recoveries: Mutex::default(),
         attempts: Mutex::default(),
+        verification: gate,
     });
     Ok(Router::new()
         .route(
@@ -188,6 +199,11 @@ pub async fn application(url: &str, outbox: PathBuf) -> anyhow::Result<Router> {
         .route("/api/v1/recovery/begin", post(recovery_begin))
         .route("/api/v1/recovery/authorize", post(recovery_authorize))
         .route("/api/v1/recovery/finish", post(recovery_finish))
+        .merge(verification::routes())
+        .layer(axum::middleware::from_fn_with_state(
+            s.clone(),
+            verification::guard,
+        ))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(s))
 }
@@ -349,6 +365,7 @@ fn params<'a>(account: &'a str, server: &'a str) -> ServerLoginParameters<'a, 'a
 }
 async fn auth_begin(
     State(s): State<Arc<AppState>>,
+    proof: Option<axum::Extension<verification::Proof>>,
     Json(r): Json<LoginBegin>,
 ) -> Api<LoginChallenge> {
     rate(&s, &format!("login:{}", r.login)).await?;
@@ -394,6 +411,7 @@ async fn auth_begin(
         PendingLogin {
             account: account.clone(),
             registration_hash,
+            verification: proof.map(|p| p.0),
             state: start.state,
             expires: now() + 120,
         },
@@ -417,12 +435,20 @@ async fn auth_finish(
     if p.expires < now() {
         return Err(auth_error());
     }
-    p.state
-        .finish(
-            CredentialFinalization::deserialize(&unb64(&r.message)?).map_err(|_| auth_error())?,
-            params(&p.account, &s.server_id),
-        )
-        .map_err(|_| auth_error())?;
+    let authenticated = unb64(&r.message)
+        .ok()
+        .and_then(|bytes| CredentialFinalization::deserialize(&bytes).ok())
+        .is_some_and(|message| {
+            p.state
+                .finish(message, params(&p.account, &s.server_id))
+                .is_ok()
+        });
+    if let (Some(g), Some(proof)) = (&s.verification, &p.verification) {
+        g.report(proof, authenticated).await;
+    }
+    if !authenticated {
+        return Err(auth_error());
+    }
     let mut tx = s.pool.begin().await?;
     // Serialize session issuance with recovery/password replacement on this account.
     sqlx::query("UPDATE accounts SET registration=registration WHERE id=$1")

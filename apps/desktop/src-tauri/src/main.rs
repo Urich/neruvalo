@@ -14,6 +14,7 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 mod launch;
+mod verification;
 #[cfg(windows)]
 mod windows_lock;
 struct Desktop {
@@ -38,9 +39,13 @@ fn secret(r: &mut Value, key: &str) -> Result<Zeroizing<String>> {
 #[tauri::command]
 async fn command(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     state: tauri::State<'_, Desktop>,
     mut request: Value,
 ) -> Result<Value, String> {
+    if window.label() != "main" {
+        return Err("Commands are only available in the main window".into());
+    }
     async fn dispatch(app: &tauri::AppHandle, state: &Desktop, r: &mut Value) -> Result<Value> {
         let action = text(r, "action")?;
         if action == "launch_config" {
@@ -294,9 +299,13 @@ async fn command(
             _ => Err(anyhow!("Unsupported command")),
         }
     }
-    dispatch(&app, &state, &mut request)
-        .await
-        .map_err(|e| e.to_string())
+    #[cfg(debug_assertions)]
+    let action = request["action"].as_str().unwrap_or("unknown").to_owned();
+    dispatch(&app, &state, &mut request).await.map_err(|e| {
+        #[cfg(debug_assertions)]
+        eprintln!("Neruvalo command {action} failed: {e:#}");
+        e.to_string()
+    })
 }
 fn main() {
     tauri::Builder::default()
@@ -311,11 +320,17 @@ fn main() {
                     Ok(server) => (server, None),
                     Err(e) => (None, Some(e.to_string())),
                 };
+            let mut client = Client::new(dir.clone())?;
+            app.manage(verification::Sessions::default());
+            let verification_app = app.handle().clone();
+            client.set_verification_opener(Box::new(move |url| {
+                verification::open(&verification_app, url)
+            }));
             app.manage(Desktop {
                 history_path: dir.join("servers.json"),
                 pinned_server,
                 startup_error,
-                client: Mutex::new(Client::new(dir)?),
+                client: Mutex::new(client),
                 clipboard_generation: Arc::new(AtomicU64::new(0)),
             });
             let handle = app.handle().clone();
@@ -346,7 +361,10 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![command])
+        .invoke_handler(tauri::generate_handler![
+            command,
+            verification::cancel_verification
+        ])
         .run(tauri::generate_context!())
         .expect("Failed to start Neruvalo");
 }

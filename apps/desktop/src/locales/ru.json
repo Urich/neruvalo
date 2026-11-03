@@ -1,4 +1,7 @@
 {
+  "ui.verifyIdentity": "Проверка пользователя",
+  "ui.completeVerificationToContinue": "Пройдите проверку, чтобы продолжить.",
+  "ui.verificationContinuesAutomatically": "После проверки продолжим автоматически.",
   "ui.openTheTauriApplicationABrowserPageIsNotANeruvaloClient": "Откройте приложение через Tauri. Страница в браузере не является клиентом Neruvalo.",
   "ui.copied": "Скопировано.",
   "ui.undo": "Отменить",

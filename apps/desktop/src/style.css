@@ -650,6 +650,47 @@ h3 {
 .discard-dialog::backdrop {
   background: #19372d66;
 }
+.verification-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+}
+.verification-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 24px 24px 16px;
+  border-bottom: 1px solid #e5ebe5;
+}
+.verification-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  background: #edf1e9;
+  color: #285e48;
+}
+.verification-header h2 { margin: 0; font-size: 20px; }
+.verification-header p { margin: 5px 0 0; font-size: 12px; }
+.verification-dialog iframe {
+  display: block;
+  width: 100%;
+  height: min(520px, 58dvh);
+  border: 0;
+  background: #fff;
+}
+.verification-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-top: 1px solid #e5ebe5;
+  background: #f8f9f6;
+}
+.verification-footer span { font-size: 12px; line-height: 1.5; color: #61746b; }
 .discard-dialog p {
   line-height: 1.7;
   color: #61746b;

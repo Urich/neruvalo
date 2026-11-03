@@ -28,6 +28,8 @@ Thumbs.db
 
 # Generated local data
 /local-data/
+/installer/local-data/
+/installer/start-dev-server-gate.cmd
 /backups/
 
 # Tauri generated schemas and recovery certificates

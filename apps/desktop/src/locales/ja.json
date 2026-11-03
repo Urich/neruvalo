@@ -1,4 +1,7 @@
 {
+  "ui.verifyIdentity": "ユーザー確認",
+  "ui.completeVerificationToContinue": "確認を完了して続行してください。",
+  "ui.verificationContinuesAutomatically": "確認後、自動的に続行します。",
   "ui.copied": "コピーしました。",
   "ui.undo": "元に戻す",
   "ui.redo": "やり直す",
