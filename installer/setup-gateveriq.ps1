@@ -50,7 +50,7 @@ try {
         Write-Host 'Creating Neruvalo integration (Cargo may compile GateVeriq)...'
         $integration = Invoke-Gate -GateArguments @(
             'integration-create', '--name', 'neruvalo',
-            '--actions', 'register,email_verify,login,unlock', '--origins', $origin
+            '--actions', 'register,login', '--origins', $origin
         ) | ConvertFrom-Json
         if (-not $integration.integration_id -or -not $integration.integration_secret) {
             throw 'GateVeriq did not return integration credentials.'
@@ -65,8 +65,8 @@ try {
         } | ConvertTo-Json | Set-Content -LiteralPath $credentialsPath -Encoding UTF8
     }
 
-    foreach ($action in @('register', 'email_verify', 'login', 'unlock')) {
-        $policy = if ($action -eq 'login') { 'adaptive' } else { 'always' }
+    foreach ($action in @('register', 'login')) {
+        $policy = 'adaptive'
         Invoke-Gate -GateArguments @(
             'integration-visual-policy', '--id', $integration.integration_id,
             '--action', $action, '--visual', $policy

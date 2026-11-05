@@ -141,6 +141,7 @@ pub struct Client {
     pending: Option<Pending>,
     certificate: Option<Zeroizing<String>>,
     verification_opener: Option<VerificationOpener>,
+    verification_secret: Option<String>,
 }
 /// A verification view lives until the request completes, fails, or is cancelled.
 /// Implementations should close their view when dropped.
@@ -351,7 +352,42 @@ impl Client {
             pending: None,
             certificate: None,
             verification_opener: None,
+            verification_secret: None,
         })
+    }
+    pub async fn prepare_verification(
+        &self,
+        server: &str,
+        action: &str,
+        login: &str,
+        email: &str,
+    ) -> Result<Value> {
+        let server = normalize_server(server)?;
+        ensure!(matches!(action, "login" | "register"), "INVALID_ACTION");
+        let r = self
+            .http
+            .post(format!("{server}/api/v1/verification/prepare"))
+            .json(&json!({"action":action,"login":login,"email":email}))
+            .send()
+            .await?;
+        if r.status() != reqwest::StatusCode::PRECONDITION_REQUIRED {
+            return response(r).await;
+        }
+        let body: Value = r.json().await?;
+        let secret = body["verification_secret"]
+            .as_str()
+            .ok_or_else(|| anyhow!("INVALID_VERIFICATION"))?;
+        ensure!(
+            secret.len() == 43
+                && secret
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            "INVALID_VERIFICATION"
+        );
+        Ok(json!({"enabled":true,"secret":secret,"url":format!("{server}/verification#{secret}")}))
+    }
+    pub fn set_verification_secret(&mut self, secret: Option<String>) {
+        self.verification_secret = secret;
     }
     pub fn set_verification_opener(&mut self, opener: VerificationOpener) {
         self.verification_opener = Some(opener);
@@ -458,6 +494,10 @@ impl Client {
             verified_send(
                 self.http
                     .post(format!("{server}/api/v1/register/begin"))
+                    .header(
+                        "x-neruvalo-verification",
+                        self.verification_secret.take().unwrap_or_default(),
+                    )
                     .json(&RegisterBegin {
                         login: login.into(),
                         email: email.into(),
@@ -554,14 +594,11 @@ impl Client {
             .ok_or_else(|| anyhow!("NO_PENDING_REGISTRATION"))?;
         p.finish.email_code = code.trim().into();
         let result: Value = response(
-            verified_send(
-                self.http
-                    .post(format!("{server}/api/v1/register/finish"))
-                    .json(&p.finish),
-                &self.http,
-                self.verification_opener.as_ref(),
-            )
-            .await?,
+            self.http
+                .post(format!("{server}/api/v1/register/finish"))
+                .json(&p.finish)
+                .send()
+                .await?,
         )
         .await?;
         self.certificate = self.pending.take().and_then(|p| p.certificate);
@@ -604,6 +641,10 @@ impl Client {
             verified_send(
                 self.http
                     .post(format!("{server}/api/v1/auth/begin"))
+                    .header(
+                        "x-neruvalo-verification",
+                        self.verification_secret.take().unwrap_or_default(),
+                    )
                     .json(&LoginBegin {
                         login: login.into(),
                         message: b64(start.message.serialize()),

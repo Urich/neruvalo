@@ -12,40 +12,42 @@ $env:NERUVALO_PUBLIC_ORIGIN = 'http://127.0.0.1:8080'
 ```
 
 Use the actual Neruvalo browser origin (including port). Create a website-mode
-GateVeriq integration with that exact origin and actions `register,email_verify,login,unlock`.
-Set `register`, `email_verify`, and `unlock` visual policies to `always`; set
-`login` to `adaptive`, using `integration-visual-policy --id ID --action ACTION
---visual POLICY`. The internal API and integration secret belong on the backend.
+GateVeriq integration with that exact origin and actions `register,login`.
+Set both visual policies to `adaptive`, using `integration-visual-policy --id ID
+--action ACTION --visual adaptive`. Rerun `installer/setup-gateveriq.ps1` to update
+an existing local integration; it reuses saved credentials.
+The internal API and integration secret belong on the backend.
 Use HTTPS outside loopback development. Keep the internal listener private.
 
-The desktop client embeds the Neruvalo server's verification page in a sandboxed
-frame inside a modal dialog using the application's design. The dialog closes
-after success, failure, or the three-minute timeout; Cancel or Escape cancels the
-operation. The frame has no Tauri capabilities, popup, form, or top-navigation
-permissions. Cancellation uses a separate command so it does not wait on the
-busy client mutex. The standalone Rust
-client retains the system-browser fallback. Backend polling uses the client's
-configured HTTP proxy; the WebView uses system networking. Widget and worker are
-vendored together from GateVeriq and served by Neruvalo. The WebView communicates
-directly with the public GateVeriq URL. A real WebView run is still required to
-validate GateVeriq browser screening on each supported platform.
+The desktop client prepares a check after the user enters the server and login
+(and email for registration). The GateVeriq checkbox appears below the password.
+The submit button becomes available after verification. Images open in a modal
+only when GateVeriq requests them; the same frame stays mounted during this
+transition. The application language is passed as the widget locale.
 
-Every registration start, email-code submission, and OPAQUE login start requires
-one verification. Email verification uses the stricter allowed flow: images before
-every code submission, including the first. The backend binds a random context to
-the complete immutable request and consumes the permission before dispatch.
-Changes to the request and repeated uses are rejected. Failures require a new
-verification. Network failures after dispatch have an uncertain business result;
-the client does not automatically replay the operation.
+Frames are sandboxed without Tauri capabilities, popups, forms or top navigation.
+Frame messages are checked against both origin and source; only the backend can
+accept the GateVeriq token. Prepared checks expire after three minutes, are bound
+to the action and login (plus email for registration), and are consumed before
+dispatch. Changing these fields resets the check. Failures require a fresh check.
+The password and OPAQUE message are created separately and are never sent to
+GateVeriq. Offline unlocking requires no verification.
 
-The browser and polling channel require a random bearer secret. The browser
-receives it in the URL fragment, then removes it from browser history. Responses
-are not cached. GateVeriq receives an opaque derived account identifier, never
-email addresses, email codes, or OPAQUE messages. The backend checks the consumed
-action, context and actual `pow_visual` method for registration and email checks.
-Business outcomes are reported after code checks and OPAQUE finalization. A
-client-side OPAQUE rejection finishes the server attempt as failed; abandoned
-attempts expire without being counted as incorrect passwords.
+Email-code submission goes directly to the existing email confirmation handler,
+which keeps its code validation, expiration and rate limit. It does not create a
+second bot check. Both proof-of-work and visual verification tokens are accepted
+when GateVeriq validates the action and context. GateVeriq decides when images
+are necessary. Business outcomes are reported after registration start and
+OPAQUE login finalization.
+
+The standalone Rust client retains the system-browser fallback, whose checks
+are bound to the complete original request. Backend requests use the configured
+HTTP proxy; the WebView uses system networking. Widget and worker are vendored
+from GateVeriq and served by Neruvalo. The frame communicates directly with the
+public GateVeriq URL. The bearer secret is delivered in the URL fragment and
+removed from browser history. Verification responses are not cached. Network
+failures after dispatch have an uncertain business result; operations are not
+automatically replayed.
 
 Current prototype limits: pending verification is in memory and expires on
 restart; outcome reporting has no durable retry queue. Account-wide failed-login
@@ -56,6 +58,7 @@ account-unlock flow described by the integration requirements.
 
 Validation: `cargo test --locked --workspace --exclude neruvalo-desktop`,
 `cargo clippy --locked --workspace --all-targets --exclude neruvalo-desktop -- -D warnings`.
-The mock GateVeriq test covers bearer ownership, required images, immutable request
-binding, single use, and privacy of outbound preparation. A real browser run with
+The mock GateVeriq test covers bearer ownership, identity and request
+binding, both verification methods, single use, email confirmation bypass, and
+privacy of outbound preparation. A real browser run with
 GateVeriq is still required to validate the deployed origins and visual challenge.

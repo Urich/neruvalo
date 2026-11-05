@@ -131,6 +131,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             }),
         )
         .route("/api/v1/verification", get(status).post(complete))
+        .route("/api/v1/verification/prepare", post(prepare))
 }
 fn bearer(h: &HeaderMap) -> Result<&str, ApiError> {
     h.get("authorization")
@@ -161,10 +162,7 @@ async fn complete(
         .filter(|a| a.expires > now())
         .ok_or_else(auth_error)?;
     let result = g.post("/internal/v1/verifications/consume", json!({"action":a.action,"context_id":a.context,"request_id":a.request,"verification_token":r["verification_token"]})).await?;
-    if result["valid"] != true
-        || result["action"] != a.action
-        || result["context_id"] != a.context
-        || (a.action != "login" && result["verification_method"] != "pow_visual")
+    if result["valid"] != true || result["action"] != a.action || result["context_id"] != a.context
     {
         return Err(auth_error());
     }
@@ -193,7 +191,6 @@ async fn protect(s: Arc<AppState>, req: Request, next: Next) -> Result<Response,
     };
     let action = match (req.method().as_str(), req.uri().path()) {
         ("POST", "/api/v1/register/begin") => "register",
-        ("POST", "/api/v1/register/finish") => "email_verify",
         ("POST", "/api/v1/auth/begin") => "login",
         _ => return Ok(next.run(req).await),
     };
@@ -207,11 +204,16 @@ async fn protect(s: Arc<AppState>, req: Request, next: Next) -> Result<Response,
         .headers
         .get("x-neruvalo-verification")
         .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
     {
         let mut pending = g.pending.lock().await;
         let a = pending
             .get(token)
-            .filter(|a| a.expires > now() && a.verified && a.hash == hash)
+            .filter(|a| {
+                a.expires > now()
+                    && a.verified
+                    && (a.hash == hash || a.hash == preparation_hash(action, &value))
+            })
             .ok_or_else(auth_error)?;
         let outcome = json!({"action":a.action,"context_id":a.context,"request_id":a.request});
         pending.remove(token); // Spend before dispatch, including invalid business requests.
@@ -226,7 +228,48 @@ async fn protect(s: Arc<AppState>, req: Request, next: Next) -> Result<Response,
         }
         return Ok(response);
     }
-    rate(&s, "verification").await?;
+    create_attempt(&s, g, action, &value, hash).await
+}
+
+fn preparation_hash(action: &str, value: &Value) -> String {
+    let identity = if action == "register" {
+        json!({"login":value["login"], "email":value["email"]})
+    } else {
+        json!({"login":value["login"]})
+    };
+    crypto::digest(&format!("preflight:{action}:{}", canonical_json(&identity)))
+}
+
+async fn prepare(
+    State(s): State<Arc<AppState>>,
+    Json(value): Json<Value>,
+) -> Result<Response, ApiError> {
+    let action = value["action"].as_str().ok_or_else(invalid)?;
+    if !matches!(action, "login" | "register")
+        || !value["login"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty() && s.len() <= 1024)
+        || (action == "register"
+            && !value["email"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty() && s.len() <= 1024))
+    {
+        return Err(invalid());
+    }
+    let Some(g) = s.verification.as_ref() else {
+        return Ok(Json(json!({"enabled":false})).into_response());
+    };
+    create_attempt(&s, g, action, &value, preparation_hash(action, &value)).await
+}
+
+async fn create_attempt(
+    s: &Arc<AppState>,
+    g: &Gate,
+    action: &str,
+    value: &Value,
+    hash: String,
+) -> Result<Response, ApiError> {
+    rate(s, "verification").await?;
     let context = crypto::token();
     // A server secret makes this mapping stable and opaque even for unknown logins.
     let identity = value[if action == "email_verify" {
@@ -279,7 +322,7 @@ mod tests {
         (url, task)
     }
     #[tokio::test]
-    async fn verification_binds_request_requires_visual_and_is_one_use() {
+    async fn verification_binds_request_accepts_pow_and_is_one_use() {
         let mock = Router::new()
             .route("/internal/v1/web/attempts", post(|h: HeaderMap, Json(v): Json<Value>| async move {
                 assert_eq!(h["authorization"], "Bearer private-secret");
@@ -288,7 +331,7 @@ mod tests {
                 Json(json!({"decision":"verify","challenge":{"id":"mock"}}))
             }))
             .route("/internal/v1/verifications/consume", post(|Json(v): Json<Value>| async move {
-                Json(json!({"valid":true,"action":v["action"],"context_id":v["context_id"],"verification_method":if v["verification_token"] == "visual" {"pow_visual"} else {"pow"}}))
+                Json(json!({"valid":v["verification_token"] != "invalid","action":v["action"],"context_id":v["context_id"],"verification_method":if v["verification_token"] == "visual" {"pow_visual"} else {"pow"}}))
             }))
             .route("/internal/v1/web/outcomes", post(|| async { Json(json!({})) }));
         let (internal, mock_task) = serve(mock).await;
@@ -334,7 +377,7 @@ mod tests {
         assert_eq!(
             http.post(&status)
                 .bearer_auth(secret)
-                .json(&json!({"verification_token":"pow"}))
+                .json(&json!({"verification_token":"invalid"}))
                 .send()
                 .await
                 .unwrap()
@@ -354,7 +397,7 @@ mod tests {
         assert!(http
             .post(&status)
             .bearer_auth(secret)
-            .json(&json!({"verification_token":"visual"}))
+            .json(&json!({"verification_token":"pow"}))
             .send()
             .await
             .unwrap()
@@ -389,6 +432,83 @@ mod tests {
                 .unwrap()
                 .status(),
             StatusCode::UNAUTHORIZED
+        );
+        // Prepared checks bind to the identity before an OPAQUE message exists.
+        for action in ["register", "login"] {
+            let r = http
+                .post(format!("{url}/api/v1/verification/prepare"))
+                .json(&json!({"action":action,"login":"alice","email":"a@example.test"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(r.status(), StatusCode::PRECONDITION_REQUIRED);
+            let r: Value = r.json().await.unwrap();
+            let proof = r["verification_secret"].as_str().unwrap();
+            assert!(http
+                .post(&status)
+                .bearer_auth(proof)
+                .json(&json!({"verification_token":"visual"}))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .is_success());
+            let endpoint = format!(
+                "{url}/api/v1/{}",
+                if action == "login" {
+                    "auth/begin"
+                } else {
+                    "register/begin"
+                }
+            );
+            for changed in [
+                json!({"login":"bob","email":"a@example.test","message":"invalid"}),
+                json!({"login":"alice","email":"other@example.test","message":"invalid"}),
+            ] {
+                if action == "login" && changed["login"] == "alice" {
+                    continue;
+                }
+                assert_eq!(
+                    http.post(&endpoint)
+                        .header("x-neruvalo-verification", proof)
+                        .json(&changed)
+                        .send()
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::UNAUTHORIZED
+                );
+            }
+            assert_eq!(
+                http.post(&endpoint)
+                    .header("x-neruvalo-verification", proof)
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+            assert_eq!(
+                http.post(&endpoint)
+                    .header("x-neruvalo-verification", proof)
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        // Email confirmation reaches its own handler without creating a bot check.
+        assert_ne!(
+            http.post(format!("{url}/api/v1/register/finish"))
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::PRECONDITION_REQUIRED
         );
         task.abort();
         mock_task.abort();
