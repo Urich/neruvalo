@@ -858,3 +858,42 @@ describe("local proxy settings", () => {
     expect(document.querySelector(".auth-card")).not.toBeNull();
   });
 });
+
+it("keeps the verification frame while typing email and refreshes only on blur", async () => {
+  const original = native.invoke.getMockImplementation()!;
+  let attempt = 0;
+  native.invoke.mockImplementation((...args) => {
+    if (args[1].request.action === "prepare_verification") {
+      attempt++;
+      return Promise.resolve({enabled:true, secret:"a".repeat(43), url:`https://a.example/verification#${attempt}`});
+    }
+    return original(...args);
+  });
+  setPreference("en");
+  await mount();
+  await click(button("Create account"));
+  await change(document.querySelector<HTMLInputElement>('input[autocomplete="username"]')!, "alice");
+  const email = document.querySelector<HTMLInputElement>('input[type="email"]')!;
+  await change(email, "a@example.test");
+  await act(async () => { email.dispatchEvent(new FocusEvent("focusout", {bubbles:true})); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+  const frame = document.querySelector<HTMLIFrameElement>(".verification-inline iframe")!;
+  expect(frame).not.toBeNull();
+  await act(async () => window.dispatchEvent(new MessageEvent("message", {
+    origin:"https://a.example", source:frame.contentWindow,
+    data:{type:"neruvalo-verification",state:"verified"},
+  })));
+  const submit = document.querySelector<HTMLButtonElement>('form button.primary')!;
+  expect(submit.disabled).toBe(false);
+  await change(email, "ab@example.test");
+  expect(submit.disabled).toBe(true);
+  await change(email, "abc@example.test");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+  expect(document.querySelector(".verification-inline iframe")).toBe(frame);
+  expect(attempt).toBe(1);
+  await act(async () => { email.dispatchEvent(new FocusEvent("focusout", {bubbles:true})); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+  expect(attempt).toBe(2);
+  expect(document.querySelector(".verification-inline iframe")?.getAttribute("src")).toContain("#2");
+  expect(submit.disabled).toBe(true);
+});

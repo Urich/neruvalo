@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HistoryVersion } from "./HistoryVersion";
 import { ConfirmNewEntry } from "./ConfirmNewEntry";
+import { VerificationInline } from "./VerificationInline";
 import { VerificationDialog } from "./VerificationDialog";
 import { useI18n, setSystemLocale } from "./i18n";
 import { Icon } from "./Icon";
@@ -85,9 +86,15 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [server, setServer] = useState("");
   const [login, setLogin] = useState("");
+  const [verificationResult, setVerificationResult] = useState<{email: string; secret: string | null} | null>(null);
+  const [verificationEmail, setVerificationEmail] = useState("");
+  const [verificationRevision, setVerificationRevision] = useState(0);
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [mode, setMode] = useState<"login" | "register" | "verify">("login");
+  const verificationSecret = verificationResult &&
+    (mode !== "register" || verificationResult.email === email)
+    ? verificationResult.secret : null;
   const [offline, setOffline] = useState("");
   const [code, setCode] = useState("");
   const [recovery, setRecovery] = useState(true);
@@ -624,7 +631,14 @@ export default function App() {
         throw new Error("ui.checkLaunchArguments");
       if (certReady) throw new Error("ui.saveTheRecoveryFileFirst");
       if (offline) await call("unlock_offline", { id: offline, password });
-      else await call("login", { server, login, password });
+      else {
+        try {
+          await call("login", { server, login, password, verification_secret: verificationSecret });
+        } finally {
+          setVerificationResult(null);
+          setVerificationRevision((value) => value + 1);
+        }
+      }
       setPassword("");
       setNeedsSync(false);
       await refresh();
@@ -635,13 +649,17 @@ export default function App() {
   }
   async function register() {
     await run(async () => {
-      const r = await call("register_begin", {
-        server,
-        login,
-        email,
-        password,
-        with_recovery: recovery,
-      });
+      let r;
+      try {
+        r = await call("register_begin", {
+          server, login, email, password,
+          with_recovery: recovery,
+          verification_secret: verificationSecret,
+        });
+      } finally {
+        setVerificationResult(null);
+        setVerificationRevision((value) => value + 1);
+      }
       setTicket(r.ticket);
       setPassword("");
       setMode("verify");
@@ -1225,6 +1243,7 @@ export default function App() {
                           type="email"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
+                          onBlur={(e) => setVerificationEmail(e.target.value)}
                           required
                         />
                       </label>
@@ -1243,6 +1262,12 @@ export default function App() {
                         required
                       />
                     </label>
+                    {!offline && <VerificationInline
+                      key={`${mode}:${verificationRevision}`}
+                      server={server} login={login} email={mode === "register" ? verificationEmail : ""}
+                      kind={mode === "register" ? "register" : "login"}
+                      onReady={(secret) => setVerificationResult({email: verificationEmail, secret})}
+                    />}
                     {mode === "register" && (
                       <label className="check">
                         <input
@@ -1257,6 +1282,7 @@ export default function App() {
                       className="primary full"
                       disabled={
                         busy ||
+                        (!offline && verificationSecret === null) ||
                         certReady ||
                         !configured ||
                         !!launch.startup_error

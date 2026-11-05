@@ -91,7 +91,7 @@ async fn command(
         }
         if matches!(
             action.as_str(),
-            "login" | "register_begin" | "register_finish"
+            "login" | "register_begin" | "register_finish" | "prepare_verification"
         ) {
             launch::check_server(state.pinned_server.as_deref(), &text(r, "server")?)?;
         }
@@ -134,7 +134,17 @@ async fn command(
                 app.emit("vault-locked", ())?;
                 Ok(Value::Null)
             }
+            "prepare_verification" => {
+                c.prepare_verification(
+                    &text(r, "server")?,
+                    &text(r, "kind")?,
+                    &text(r, "login")?,
+                    r["email"].as_str().unwrap_or(""),
+                )
+                .await
+            }
             "register_begin" => {
+                c.set_verification_secret(r["verification_secret"].as_str().map(str::to_owned));
                 let password = secret(r, "password")?;
                 c.register_begin(
                     &text(r, "server")?,
@@ -150,6 +160,7 @@ async fn command(
                     .await
             }
             "login" => {
+                c.set_verification_secret(r["verification_secret"].as_str().map(str::to_owned));
                 let password = secret(r, "password")?;
                 let server = text(r, "server")?;
                 let result = c.login(&server, &text(r, "login")?, password).await?;

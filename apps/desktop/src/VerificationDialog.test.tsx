@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { VerificationDialog } from "./VerificationDialog";
-import { setPreference } from "./i18n";
+import { setPreference, setSystemLocale } from "./i18n";
 
 const native = vi.hoisted(() => ({
   handlers: new Map<string, (event: { payload: any }) => void>(),
@@ -74,4 +74,19 @@ it("ignores non-server URLs and keeps cancellation errors recoverable", async ()
   await act(async () => host.querySelector("button")!.click());
   expect(host.querySelector("dialog")).not.toBeNull();
   expect(host.querySelector('[role="alert"]')).not.toBeNull();
+});
+
+it.each(["ru", "de", "zh-Hant"])("uses the current application language %s for verification", async (language) => {
+  await act(async () => setPreference(language));
+  await emit("verification-open", attempt);
+  expect(new URL(host.querySelector("iframe")!.src).searchParams.get("lang")).toBe(language);
+});
+
+it("uses the resolved system language in automatic mode", async () => {
+  await act(async () => {
+    setSystemLocale("ru-RU");
+    setPreference("auto");
+  });
+  await emit("verification-open", attempt);
+  expect(new URL(host.querySelector("iframe")!.src).searchParams.get("lang")).toBe("ru");
 });
