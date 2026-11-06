@@ -276,5 +276,12 @@
   "ui.saveProxy": "प्रॉक्सी सहेजें",
   "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "प्रॉक्सी सेटिंग सहेजी गईं। वे अगले अनुरोधों पर लागू होंगी।",
   "ui.couldNotLoadProxySettings": "प्रॉक्सी सेटिंग लोड नहीं हो सकीं।",
-  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "प्रॉक्सी सेटिंग सहेजी नहीं जा सकीं। पता और प्रॉक्सी प्रकार जाँचें।"
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "प्रॉक्सी सेटिंग सहेजी नहीं जा सकीं। पता और प्रॉक्सी प्रकार जाँचें।",
+  "ui.theme": "थीम",
+  "ui.theme.system": "सिस्टम के अनुसार",
+  "ui.theme.light": "हल्की",
+  "ui.theme.dark": "गहरी",
+  "ui.theme.nord": "Nord",
+  "ui.theme.dark-green": "गहरा हरा",
+  "ui.theme.solarized": "Solarized Light"
 }

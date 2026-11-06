@@ -110,7 +110,12 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
             "/verification",
-            get(|| async { Html(include_str!("verification.html")) }),
+            get(|| async {
+                Html(include_str!("verification.html").replace(
+                    "__VERIFICATION_MESSAGES__",
+                    include_str!("verification/messages.json"),
+                ))
+            }),
         )
         .route(
             "/verification/widget.js",
@@ -362,6 +367,16 @@ mod tests {
         .unwrap();
         let (url, task) = serve(app).await;
         let http = reqwest::Client::new();
+        let page = http
+            .get(format!("{url}/verification"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(!page.contains("__VERIFICATION_MESSAGES__"));
+        assert!(page.contains("incorrectPasswordOrDamagedData") && page.contains("translations"));
         let endpoint = format!("{url}/api/v1/register/begin");
         let body = json!({"login":"alice","email":"a@example.test","message":"invalid"});
         let r = http.post(&endpoint).json(&body).send().await.unwrap();

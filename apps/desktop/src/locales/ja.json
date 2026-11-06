@@ -276,5 +276,12 @@
   "ui.saveProxy": "プロキシを保存",
   "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "プロキシ設定を保存しました。次のリクエストから適用されます。",
   "ui.couldNotLoadProxySettings": "プロキシ設定を読み込めませんでした。",
-  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "プロキシ設定を保存できませんでした。アドレスと種類を確認してください。"
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "プロキシ設定を保存できませんでした。アドレスと種類を確認してください。",
+  "ui.theme": "テーマ",
+  "ui.theme.system": "システム設定に従う",
+  "ui.theme.light": "ライト",
+  "ui.theme.dark": "ダーク",
+  "ui.theme.nord": "Nord",
+  "ui.theme.dark-green": "ダークグリーン",
+  "ui.theme.solarized": "Solarized Light"
 }

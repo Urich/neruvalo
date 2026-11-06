@@ -276,5 +276,12 @@
   "ui.saveProxy": "حفظ الوكيل",
   "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "حُفظت إعدادات الوكيل. ستُطبق على الطلبات التالية.",
   "ui.couldNotLoadProxySettings": "تعذر تحميل إعدادات الوكيل.",
-  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "تعذر حفظ إعدادات الوكيل. تحقق من العنوان ونوع الوكيل."
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "تعذر حفظ إعدادات الوكيل. تحقق من العنوان ونوع الوكيل.",
+  "ui.theme": "المظهر",
+  "ui.theme.system": "حسب النظام",
+  "ui.theme.light": "فاتح",
+  "ui.theme.dark": "داكن",
+  "ui.theme.nord": "Nord",
+  "ui.theme.dark-green": "أخضر داكن",
+  "ui.theme.solarized": "Solarized Light"
 }

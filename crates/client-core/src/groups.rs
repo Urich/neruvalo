@@ -44,7 +44,10 @@ impl Client {
         data: &RecordData,
     ) -> Result<()> {
         let a = self.unlocked()?;
-        ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
+        ensure!(
+            a.profile.kind == ProfileKind::Local || (a.online && !a.token.is_empty()),
+            "OFFLINE_READ_ONLY"
+        );
         ensure!(!a.needs_sync, "SYNCHRONIZATION_REQUIRED");
         let key = if data.record_type == "group" {
             "parent_group_id"
@@ -132,7 +135,10 @@ impl Client {
                 continue;
             }
             let a = self.unlocked()?;
-            ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
+            ensure!(
+                a.profile.kind == ProfileKind::Local || (a.online && !a.token.is_empty()),
+                "OFFLINE_READ_ONLY"
+            );
             let context = [
                 b"neruvalo-legacy-group-id-v1\0".as_slice(),
                 prefix.as_bytes(),
@@ -284,7 +290,10 @@ impl Client {
         }
         let http = self.http.clone();
         let a = self.unlocked()?;
-        ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
+        ensure!(
+            a.profile.kind == ProfileKind::Local || (a.online && !a.token.is_empty()),
+            "OFFLINE_READ_ONLY"
+        );
         ensure!(!a.needs_sync, "SYNCHRONIZATION_REQUIRED");
         ensure!(
             sqlx::query("SELECT value FROM meta WHERE name='pending_operation'")
@@ -340,6 +349,10 @@ impl Client {
                 .collect(),
             records,
         };
+        if a.profile.kind == ProfileKind::Local {
+            local::commit(a, &batch.records, Some(&batch.snapshot)).await?;
+            return Ok(json!({"changed":batch.records.len()}));
+        }
         set_meta(
             &a.cache,
             "pending_operation",

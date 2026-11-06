@@ -276,5 +276,12 @@
   "ui.saveProxy": "Сохранить прокси",
   "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "Настройки прокси сохранены. Они применятся к следующим запросам.",
   "ui.couldNotLoadProxySettings": "Не удалось загрузить настройки прокси.",
-  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Не удалось сохранить настройки прокси. Проверьте адрес и тип прокси."
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Не удалось сохранить настройки прокси. Проверьте адрес и тип прокси.",
+  "ui.theme": "Тема оформления",
+  "ui.theme.system": "Как в системе",
+  "ui.theme.light": "Светлая",
+  "ui.theme.dark": "Тёмная",
+  "ui.theme.nord": "Nord",
+  "ui.theme.dark-green": "Тёмно-зелёная",
+  "ui.theme.solarized": "Solarized Light"
 }

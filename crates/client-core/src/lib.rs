@@ -18,6 +18,7 @@ use std::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 mod groups;
+mod local;
 mod proxy;
 mod sharing;
 #[cfg(test)]
@@ -25,8 +26,17 @@ mod verification_tests;
 pub use groups::GroupView;
 pub use proxy::ProxySettings;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileKind {
+    Local,
+    #[default]
+    Server,
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Profile {
+    #[serde(default)]
+    pub kind: ProfileKind,
     pub id: String,
     pub server: String,
     pub server_id: String,
@@ -415,7 +425,7 @@ impl Client {
     pub fn status(&mut self) -> Value {
         match self.unlocked() {
             Ok(a) => {
-                json!({"unlocked":true,"profile":a.profile.id,"login":a.profile.login,"server":a.profile.server,"online":a.online,"timeout_seconds":a.profile.timeout_seconds})
+                json!({"unlocked":true,"profile":a.profile.id,"login":a.profile.login,"server":a.profile.server,"online":a.online,"local":a.profile.kind == ProfileKind::Local,"timeout_seconds":a.profile.timeout_seconds})
             }
             Err(_) => json!({"unlocked":false}),
         }
@@ -428,7 +438,7 @@ impl Client {
             if p.is_file() {
                 let profile: Profile = serde_json::from_slice(&std::fs::read(p)?)?;
                 profiles
-                    .push(json!({"id":profile.id,"login":profile.login,"server":profile.server}));
+                    .push(json!({"id":profile.id,"login":profile.login,"server":profile.server,"local":profile.kind == ProfileKind::Local}));
             }
         }
         Ok(profiles)
@@ -736,6 +746,7 @@ impl Client {
             &local_context(&info.server_id, &result.account_id),
         )?;
         let profile = Profile {
+            kind: ProfileKind::Server,
             id: id.clone(),
             server,
             server_id: info.server_id,
@@ -967,7 +978,10 @@ impl Client {
         };
         let http = self.http.clone();
         let a = self.unlocked()?;
-        ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
+        ensure!(
+            a.profile.kind == ProfileKind::Local || (a.online && !a.token.is_empty()),
+            "OFFLINE_READ_ONLY"
+        );
         ensure!(!a.needs_sync, "SYNCHRONIZATION_REQUIRED");
         ensure!(
             sqlx::query("SELECT value FROM meta WHERE name='pending_operation'")
@@ -1021,6 +1035,9 @@ impl Client {
             &a.profile.account_id,
             &r,
         ));
+        if a.profile.kind == ProfileKind::Local {
+            return local::commit(a, &[r], structure_snapshot.as_ref()).await;
+        }
         let grouped = structure_snapshot.is_some();
         let request = if let Some(snapshot) = structure_snapshot {
             serde_json::to_value(neruvalo_protocol::SaveBatch {
@@ -1084,7 +1101,17 @@ impl Client {
     pub async fn settings(&mut self, seconds: u32) -> Result<Value> {
         let http = self.http.clone();
         let a = self.unlocked()?;
-        ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
+        ensure!(
+            a.profile.kind == ProfileKind::Local || (a.online && !a.token.is_empty()),
+            "OFFLINE_READ_ONLY"
+        );
+        ensure!(seconds <= 86400, "Invalid timeout");
+        if a.profile.kind == ProfileKind::Local {
+            a.profile.timeout_seconds = seconds;
+            let profile = a.profile.clone();
+            self.store_profile(&profile)?;
+            return Ok(json!({"timeout_seconds":seconds}));
+        }
         let r: Settings = response(
             http.put(format!("{}/api/v1/settings", a.profile.server))
                 .bearer_auth(a.token.as_str())

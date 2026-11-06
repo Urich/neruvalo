@@ -178,3 +178,10 @@ pub struct SaveBatch {
 
 mod sharing;
 pub use sharing::*;
+
+/// Encrypted vault history import. Existing versions must match exactly.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ImportVault {
+    pub operation_id: String,
+    pub versions: Vec<StoredVersion>,
+}

@@ -1,4 +1,4 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Neruvalo — проверка</title>
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Neruvalo</title>
 <style>
 :root{font-family:Inter,"Segoe UI",sans-serif;color:#233d36;background:#f8f9f6;font-size:14px;font-synthesis:none}
 *{box-sizing:border-box}body{margin:0;padding:24px}main{max-width:500px;margin:0 auto;padding:24px;background:#fff;border:1px solid #dce3dd;border-radius:14px}h1{font-size:22px;margin:0 0 24px}p{line-height:1.6}#status{font-size:12px;color:#61746b;margin:16px 0 0}#status[data-error]{color:#a23f35}
@@ -15,14 +15,19 @@ html.embedded{background:#fff}html.embedded body{padding:20px 24px}html.embedded
 #verification input[type="checkbox"]:focus-visible{outline:3px solid #8bb7a1;outline-offset:3px}
 @media(forced-colors:active){#verification input[type="checkbox"]{appearance:auto}}
 </style>
-<main><h1>Проверка Neruvalo</h1><div id="verification"></div><p id="status" role="status">Подготовка…</p></main><script type="module">
-import {verifyWebsiteAttempt} from '/verification/widget.js';
+<main><h1>Neruvalo</h1><div id="verification"></div><p id="status" role="status"></p></main>
+<script type="application/json" id="verification-messages">__VERIFICATION_MESSAGES__</script>
+<script type="module">
+import {verifyWebsiteAttempt, configureMessages, resolveLocale} from '/verification/widget.js';
+const bundle = JSON.parse(document.querySelector('#verification-messages').textContent);
+configureMessages(bundle);
 const params = new URLSearchParams(location.search);
+const locale = resolveLocale(null, params.get('lang') || 'en');
+const values = bundle.translations[locale];
+const t = Object.fromEntries(bundle.keys.map((key, index) => [key, values[index]]));
 const notify = (state) => { if (window.parent !== window) window.parent.postMessage({type:'neruvalo-verification', state}, '*'); };
-const locale = params.get('lang') || 'en';
-const ru = locale.toLowerCase().startsWith('ru');
 document.documentElement.lang = locale;
-document.documentElement.dir = locale.toLowerCase().startsWith('ar') ? 'rtl' : 'ltr';
+document.documentElement.dir = locale === 'ar' ? 'rtl' : 'ltr';
 if(params.get('inline') === '1') document.documentElement.classList.add('inline');
 if(params.get('embedded') === '1') document.documentElement.classList.add('embedded');
 const secret = location.hash.slice(1); history.replaceState(null, '', location.pathname);
@@ -32,26 +37,22 @@ const verification = document.querySelector('#verification');
 new MutationObserver(() => {
   if (verification.querySelector('button[aria-pressed]')) notify('visual');
 }).observe(verification, {childList:true, subtree:true});
-status.textContent = ru ? 'Подготовка…' : 'Preparing…';
-// Translate the proof-of-work status messages; visual controls use the widget locale.
-const labels = {'Confirm verification':'Продолжить','Confirm selection':'Подтвердить выбор','Checking request…':'Проверяем…','Checking request...':'Проверяем…','Request checked':'Проверка пройдена','Check failed. Please try again.':'Не удалось пройти проверку. Повторите попытку.'};
-if(ru) new MutationObserver(() => {
-  for(const node of document.querySelectorAll('#verification button, #verification')) {
-    if(node.childNodes.length === 1 && node.firstChild.nodeType === Node.TEXT_NODE && labels[node.textContent]) node.textContent = labels[node.textContent];
-  }
-}).observe(document.querySelector('#verification'), {childList:true, subtree:true, characterData:true});
+status.textContent = t.verificationPreparing;
 try {
   const r = await fetch('/api/v1/verification', {headers, cache:'no-store'});
-  if (!r.ok) throw Error(ru ? 'Проверка истекла. Повторите действие в приложении.' : 'Verification expired. Try again in the app.');
+  if (!r.ok) throw Error('VERIFICATION_EXPIRED');
   const p = await r.json();
   if (!p.verified) {
-    status.textContent = ru ? 'Пройдите проверку выше.' : 'Complete the check above.';
-    const result = await verifyWebsiteAttempt(document.querySelector('#verification'), p.attempt, {serviceURL:p.service_url, locale});
-    if (!result.verification_token) throw Error(ru ? 'Проверка не завершена' : 'Verification incomplete');
+    status.textContent = t.verificationPrompt;
+    const result = await verifyWebsiteAttempt(verification, p.attempt, {serviceURL:p.service_url, locale});
+    if (!result.verification_token) throw Error('VERIFICATION_FAILED');
     const done = await fetch('/api/v1/verification', {method:'POST', headers, body:JSON.stringify({verification_token:result.verification_token})});
-    if (!done.ok) throw Error(ru ? 'Не удалось подтвердить проверку' : 'Could not confirm verification');
+    if (!done.ok) throw Error('VERIFICATION_FAILED');
   }
   notify('verified');
-  status.textContent = ru ? 'Готово. Продолжаем…' : 'Done. Continuing…';
-} catch(e) { notify('error'); status.dataset.error = ''; status.textContent = e.message; }
+  status.textContent = t.verificationCompleted;
+} catch(e) {
+  notify('error'); status.dataset.error = '';
+  status.textContent = /expired/i.test(e.message) ? t.verificationExpired : t.verificationFailed;
+}
 </script></html>

@@ -29,3 +29,17 @@ describe("vault view rules", () => {
       );
   });
 });
+
+describe("localized error boundary", () => {
+  it.each([
+    "incorrect secret or damaged data", new Error("incorrect secret or damaged data"), "Error: INVALID_PASSWORD",
+  ])("maps decryption and password errors to a translation key", (error) => {
+    expect(errorText(error)).toBe("ui.incorrectPasswordOrDamagedData");
+  });
+  it.each(["request failed at http://localhost:8787", "database is locked (os error 5)", "UNRECOGNIZED: details", "ui.unknownKey"])("never exposes raw backend text: %s", (error) => {
+    expect(errorText(error)).toBe("ui.operationFailedCheckYourConnectionAndTryAgain");
+  });
+  it("retains known translation keys", () => {
+    expect(errorText(new Error("ui.saveTheRecoveryFileFirst"))).toBe("ui.saveTheRecoveryFileFirst");
+  });
+});

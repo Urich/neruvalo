@@ -1,3 +1,4 @@
+mod local_import;
 mod sharing;
 mod verification;
 use anyhow::{ensure, Context};
@@ -191,6 +192,10 @@ async fn application_with_gate(
         .route("/api/v1/snapshot", get(snapshot))
         .route("/api/v2/accounts/{login}", get(sharing::resolve))
         .route("/api/v2/shares/change", post(sharing::change))
+        .route(
+            "/api/v1/vault/import",
+            post(local_import::import).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route("/api/v1/records/save", post(save_record))
         .route("/api/v1/records/batch", post(save_batch))
         .route("/api/v1/records/{id}/history", get(history))
