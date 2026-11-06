@@ -5,7 +5,7 @@ import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import App from "./App";
 import { Group } from "./groups";
 import { empty, Entry } from "./model";
-import { setPreference } from "./i18n";
+import { setPreference, translate } from "./i18n";
 const native = vi.hoisted(() => ({
   invoke: vi.fn(),
   listen: vi.fn(),
@@ -698,7 +698,9 @@ describe("return from public screens", () => {
     for (const page of ["Настройки", "О программе"]) {
       await click(button(page));
       expect(document.querySelector(".auth-card")).toBeNull();
-      await click(button("Вернуться ко входу"));
+      expect(document.querySelector(".page-back")).toBeNull();
+      expect(document.querySelector(".local-vault-tools")).toBeNull();
+      await click(button(translate("ui.unlockVault"), document.querySelector(".sidebar")!));
       expect(
         document.querySelector<HTMLInputElement>(
           'input[autocomplete="username"]',
@@ -723,7 +725,8 @@ describe("password generation in the editor", () => {
     await click(button("Настройки"));
     const settings = document.querySelector(".generator-settings")!;
     await change(settings.querySelector("select")!, "32");
-    await click(button("Вернуться в хранилище"));
+    expect(document.querySelector(".page-back")).toBeNull();
+    await click(button(translate("ui.settings"), document.querySelector(".sidebar")!));
     await click(button("Сгенерировать пароль"));
     const password = [
       ...document.querySelectorAll<HTMLInputElement>(".detail-panel input"),
@@ -854,7 +857,7 @@ describe("local proxy settings", () => {
         ["settings", "login"].includes(a.request.action),
       ),
     ).toBe(false);
-    await click(button("Вернуться ко входу"));
+    await click(button(translate("ui.unlockVault"), document.querySelector(".sidebar")!));
     expect(document.querySelector(".auth-card")).not.toBeNull();
   });
 });
@@ -896,4 +899,61 @@ it("keeps the verification frame while typing email and refreshes only on blur",
   expect(attempt).toBe(2);
   expect(document.querySelector(".verification-inline iframe")?.getAttribute("src")).toContain("#2");
   expect(submit.disabled).toBe(true);
+});
+
+it("creates and edits a local vault without requesting a server or bot check", async () => {
+  const original = native.invoke.getMockImplementation()!;
+  let local = false;
+  let created = false;
+  native.invoke.mockImplementation((...args) => {
+    const request = args[1].request;
+    if (request.action === "lock") { local = false; native.unlocked = false; return Promise.resolve(null); }
+    if (request.action === "prepare_verification") return Promise.resolve({enabled:true,secret:"a".repeat(43),url:"https://a.example/verification#proof"});
+    if (request.action === "create_local") { local = true; created = true; native.unlocked = true; return Promise.resolve({local:true}); }
+    if (request.action === "status" && local) return Promise.resolve({unlocked:true,local:true,online:false,profile:"local-1",login:"Personal",server:"",timeout_seconds:300});
+    if (request.action === "profiles" && created) return Promise.resolve([{id:"local-1",login:"Personal",server:"",local:true}]);
+    return original(...args);
+  });
+  setPreference("en"); await mount();
+  await click(button("Create local vault"));
+  const inputs = document.querySelectorAll<HTMLInputElement>(".local-vault-dialog input");
+  await change(inputs[0], "Personal"); await change(inputs[1], "local-password-123"); await change(inputs[2], "local-password-123");
+  await click(document.querySelector<HTMLButtonElement>('.local-vault-dialog button[type="submit"]')!);
+  expect(document.querySelector(".account-identity")?.textContent).toContain("Personal");
+  expect(button(translate("ui.addEntry")).disabled).toBe(false);
+  expect(button("Create group").disabled).toBe(false);
+  expect([...document.querySelectorAll("header button")].some((b) => b.textContent?.trim() === translate("ui.synchronize"))).toBe(false);
+  expect(button("Save encrypted backup", document.querySelector("header")!)).toBeDefined();
+  expect(button("Connect to a server", document.querySelector("header")!)).toBeDefined();
+  expect(native.invoke.mock.calls.some(([, args]) => ["login","register_begin","prepare_verification"].includes(args.request.action))).toBe(false);
+  await click(button("Settings"));
+  expect(document.body.textContent).toContain("Save encrypted backup");
+  expect(document.querySelector(".content .local-vault-tools")).toBeNull();
+  await click(button("Connect to a server", document.querySelector("header")!));
+  expect(document.querySelector(".local-vault-dialog")?.textContent).toContain("Sign in or create a server account.");
+  await click(document.querySelector<HTMLButtonElement>('.local-vault-dialog button[type="submit"]')!);
+  expect(document.querySelector(".auth-card")).not.toBeNull();
+  expect(document.querySelector('option[value="local-1"]')).toBeNull();
+  expect(document.querySelector(".auth-card")?.textContent).not.toContain("Sign in or create a server account.");
+  await change(document.querySelector<HTMLInputElement>('input[autocomplete="username"]')!, "server_user");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+  const prepared = native.invoke.mock.calls.find(([, args]) => args.request.action === "prepare_verification");
+  expect(prepared?.[1].request.server).toBe("https://a.example");
+  expect(prepared?.[1].request.kind).toBe("login");
+  const frame = document.querySelector<HTMLIFrameElement>(".verification-inline iframe")!;
+  expect(frame).not.toBeNull();
+  const submit = document.querySelector<HTMLButtonElement>('form > button.primary')!;
+  expect(submit.disabled).toBe(true);
+  await act(async () => window.dispatchEvent(new MessageEvent("message", {
+    origin:"https://a.example", source:frame.contentWindow,
+    data:{type:"neruvalo-verification",state:"verified"},
+  })));
+  expect(submit.disabled).toBe(false);
+  await change(document.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')!, "server-password-123");
+  await click(submit);
+  const loginCall = native.invoke.mock.calls.find(([, args]) => args.request.action === "login");
+  expect(loginCall?.[1].request).toMatchObject({server:"https://a.example",login:"server_user",password:"server-password-123",verification_secret:"a".repeat(43)});
+  expect(native.invoke.mock.calls.some(([, args]) => args.request.action === "unlock_offline")).toBe(false);
+  expect(document.querySelector(".local-vault-dialog")?.textContent).toContain("Import local vault");
+  expect(document.querySelector<HTMLSelectElement>('.local-vault-dialog select')?.value).toBe("local-1");
 });

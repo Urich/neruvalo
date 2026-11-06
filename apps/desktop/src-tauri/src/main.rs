@@ -71,6 +71,9 @@ async fn command(
             anyhow::bail!("Invalid launch configuration: {error}");
         }
         let mut c = state.client.lock().await;
+        if matches!(action.as_str(), "create_local" | "restore_local_backup") {
+            anyhow::ensure!(c.status()["unlocked"] != true, "LOCK_VAULT_FIRST");
+        }
         if matches!(
             action.as_str(),
             "touch"
@@ -85,6 +88,8 @@ async fn command(
                 | "resolve_recipient"
                 | "share_change"
                 | "settings"
+                | "export_local_backup"
+                | "import_local"
         ) {
             let status = c.status();
             launch::check_profile(r["expected_profile"].as_str(), status["profile"].as_str())?;
@@ -102,16 +107,61 @@ async fn command(
                 .iter()
                 .find(|p| p["id"].as_str() == Some(&id))
                 .ok_or_else(|| anyhow!("Profile not found"))?;
-            launch::check_server(
-                state.pinned_server.as_deref(),
-                p["server"].as_str().unwrap_or(""),
-            )?;
+            if p["local"] != true {
+                launch::check_server(
+                    state.pinned_server.as_deref(),
+                    p["server"].as_str().unwrap_or(""),
+                )?;
+            }
         }
         match text(r, "action")?.as_str() {
+            "create_local" => {
+                c.create_local(&text(r, "name")?, secret(r, "password")?)
+                    .await
+            }
+            "export_local_backup" => {
+                let password = secret(r, "password")?;
+                let path = app
+                    .dialog()
+                    .file()
+                    .set_file_name("neruvalo.nvbackup")
+                    .blocking_save_file();
+                let Some(path) = path else {
+                    return Ok(json!(false));
+                };
+                c.export_local_backup(
+                    &path.into_path().map_err(|_| anyhow!("Invalid path"))?,
+                    password,
+                )
+                .await?;
+                Ok(json!(true))
+            }
+            "restore_local_backup" => {
+                let password = secret(r, "password")?;
+                let path = app
+                    .dialog()
+                    .file()
+                    .add_filter("Neruvalo backup", &["nvbackup"])
+                    .blocking_pick_file();
+                let Some(path) = path else {
+                    return Ok(Value::Null);
+                };
+                c.restore_local_backup(
+                    &path.into_path().map_err(|_| anyhow!("Invalid path"))?,
+                    password,
+                )
+                .await
+            }
+            "import_local" => {
+                let source = text(r, "source_id")?;
+                c.import_local(&source, secret(r, "password")?).await
+            }
             "profiles" => {
                 let mut profiles = c.profiles().await?;
                 if let Some(server) = &state.pinned_server {
-                    profiles.retain(|p| p["server"].as_str() == Some(server.as_str()));
+                    profiles.retain(|p| {
+                        p["local"] == true || p["server"].as_str() == Some(server.as_str())
+                    });
                 }
                 Ok(serde_json::to_value(profiles)?)
             }

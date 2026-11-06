@@ -13,6 +13,7 @@ import { TypePicker } from "./TypePicker";
 import { generatePassword, normalizeGenerator } from "./passwordGenerator";
 import { DismissShare } from "./DismissShare";
 import { ShareDialog, Recipient } from "./ShareDialog";
+import { LocalVaultTools } from "./LocalVaultTools";
 import { Settings } from "./Settings";
 import { ContextMenu, MenuItem } from "./ContextMenu";
 import {
@@ -40,6 +41,7 @@ import { Data, Entry, Profile, types, empty, errorText } from "./model";
 type Status = {
   unlocked: boolean;
   online?: boolean;
+  local?: boolean;
   login?: string;
   server?: string;
   profile?: string;
@@ -58,6 +60,7 @@ export default function App() {
   const [generator, setGenerator] = useState(() =>
     normalizeGenerator(readLocal("neruvalo.generator", null)),
   );
+  const [transferSource, setTransferSource] = useState("");
   const [page, setPage] = useState<"vault" | "settings" | "about">("vault");
   const [treeReveal, setTreeReveal] = useState(0);
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
@@ -96,6 +99,7 @@ export default function App() {
     (mode !== "register" || verificationResult.email === email)
     ? verificationResult.secret : null;
   const [offline, setOffline] = useState("");
+  const offlineProfile = transferSource ? "" : offline;
   const [code, setCode] = useState("");
   const [recovery, setRecovery] = useState(true);
   const [ticket, setTicket] = useState("");
@@ -245,7 +249,7 @@ export default function App() {
         if (config.locale) setSystemLocale(config.locale);
         setServer(config.pinned_server ?? config.servers[0] ?? "");
         setOtherServer(!config.servers.length);
-        if (config.startup_error) setError(config.startup_error);
+        if (config.startup_error) setError("ui.checkLaunchArguments");
         setConfigured(true);
       })
       .catch((e) => setError(errorText(e)));
@@ -307,7 +311,7 @@ export default function App() {
     });
   }
   const accessibleProfiles = profiles.filter(
-    (p) => !launch.pinned_server || p.server === launch.pinned_server,
+    (p) => p.local || !launch.pinned_server || p.server === launch.pinned_server,
   );
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -423,19 +427,19 @@ export default function App() {
           items = [
             {
               label: t("ui.addEntryLabel"),
-              disabled: busy || !status.online || needsSync || !!group.archived,
+              disabled: busy || !(status.online || status.local) || needsSync || !!group.archived,
               action: safe(() =>
                 requestLeave(() => beginNew(kind || "login", group.id)),
               ),
             },
             {
               label: t("ui.createSubgroup"),
-              disabled: busy || !status.online || needsSync || !!group.archived,
+              disabled: busy || !(status.online || status.local) || needsSync || !!group.archived,
               action: safe(() => requestLeave(() => beginGroup(group.id))),
             },
             {
               label: t(archive ? "ui.restoreFromArchive" : "ui.archiveEntry"),
-              disabled: busy || !status.online || needsSync,
+              disabled: busy || !(status.online || status.local) || needsSync,
               action: safe(() =>
                 requestLeave(() =>
                   setArchiveRequest({
@@ -487,7 +491,7 @@ export default function App() {
             },
             {
               label: t("ui.removeForMe"),
-              disabled: busy || !status.online || needsSync,
+              disabled: busy || !(status.online || status.local) || needsSync,
               action: safe(() => requestLeave(() => setDismissTarget(record))),
             },
           );
@@ -506,7 +510,7 @@ export default function App() {
           },
           {
             label: t("ui.edit"),
-            disabled: busy || !status.online || needsSync || record.archived,
+            disabled: busy || !(status.online || status.local) || needsSync || record.archived,
             action: safe(() =>
               requestLeave(() => {
                 open(record);
@@ -526,7 +530,7 @@ export default function App() {
           },
           {
             label: t(record.archived ? t("ui.restoreFromArchive") : t("ui.archiveEntry")),
-            disabled: busy || !status.online || needsSync,
+            disabled: busy || !(status.online || status.local) || needsSync,
             action: safe(() =>
               requestLeave(() => {
                 void setArchived(!record.archived, record);
@@ -619,7 +623,7 @@ export default function App() {
       !pending ||
       pending.epoch !== generation.current ||
       !status.unlocked ||
-      !status.online ||
+      !(status.online || status.local) ||
       busy
     )
       return;
@@ -627,10 +631,10 @@ export default function App() {
   }
   async function signIn() {
     await run(async () => {
-      if (!configured || launch.startup_error)
+      if ((!configured || launch.startup_error) && !profiles.find((p) => p.id === offlineProfile)?.local)
         throw new Error("ui.checkLaunchArguments");
       if (certReady) throw new Error("ui.saveTheRecoveryFileFirst");
-      if (offline) await call("unlock_offline", { id: offline, password });
+      if (offlineProfile) await call("unlock_offline", { id: offlineProfile, password });
       else {
         try {
           await call("login", { server, login, password, verification_secret: verificationSecret });
@@ -772,6 +776,24 @@ export default function App() {
     profiles.find((p) => p.id === status.profile)?.server ??
     "";
   const currentType = types[(draft ?? selected?.data)?.record_type ?? "login"];
+  const localTools = (<LocalVaultTools
+        status={status} profiles={profiles} source={transferSource} busy={busy}
+        toolbar={status.unlocked}
+        onSource={setTransferSource}
+        onChanged={async () => { await refresh(); setProfiles(await call("profiles")); }}
+        onConnect={async () => {
+          const source = status.profile!;
+          await call("lock");
+          clear();
+          const destination = launch.pinned_server ?? launch.servers[0] ?? "";
+          setServer(destination);
+          setOtherServer(!destination);
+          setLogin("");
+          setVerificationResult(null);
+          setTransferSource(source);
+          setMode("login");
+        }}
+      />);
   return (
     <div
       className="app"
@@ -871,6 +893,16 @@ export default function App() {
             Neruvalo<small>YOUR PRIVATE SPACE</small>
           </div>
         </div>
+        {!status.unlocked && (
+          <button
+            type="button"
+            className={page === "vault" ? "nav active" : "nav"}
+            aria-current={page === "vault" ? "page" : undefined}
+            onClick={() => setPage("vault")}
+          >
+            <Icon name="login" /> <span>{t("ui.unlockVault")}</span>
+          </button>
+        )}
         {status.unlocked && (
           <>
             <button
@@ -906,7 +938,7 @@ export default function App() {
             >
               <Icon name="archive" /> <span>{t("ui.archive")}</span>
             </button>
-            {(["outgoing", "received"] as const).map((view) => (
+            {!status.local && (["outgoing", "received"] as const).map((view) => (
               <button
                 key={view}
                 aria-label={t(
@@ -987,7 +1019,7 @@ export default function App() {
         </div>
       </aside>
       <main>
-        <header>
+        <header className={status.unlocked ? "vault-toolbar" : undefined}>
           <div className="breadcrumb">
             {t("ui.personalSpace")}
             <span>/</span> {archive ? t("ui.archive") : t("ui.vault")}
@@ -995,14 +1027,15 @@ export default function App() {
           <div className="connection">
             <i className={status.online ? "online" : ""} />
             {status.unlocked
-              ? status.online
+              ? status.local ? t("ui.localVault") : status.online
                 ? t("ui.online")
                 : t("ui.offlineReadOnly")
               : t("ui.locked")}
           </div>
           {status.unlocked && (
             <>
-              <button
+              {localTools}
+              {!status.local && <button
                 className="subtle"
                 disabled={busy}
                 onClick={() =>
@@ -1012,7 +1045,7 @@ export default function App() {
                 }
               >
                 {t("ui.synchronize")}
-              </button>
+              </button>}
               <button
                 className="subtle"
                 onClick={() => {
@@ -1026,7 +1059,7 @@ export default function App() {
           )}
         </header>
         <div className="content">
-          {page !== "vault" && (
+          {status.unlocked && page === "about" && (
             <button
               type="button"
               className="secondary page-back"
@@ -1052,6 +1085,7 @@ export default function App() {
           {page === "about" ? (
             <About />
           ) : page === "settings" ? (
+            <div>
             <Settings
               loadProxy={() => call("proxy_settings")}
               saveProxy={async (settings) => {
@@ -1063,8 +1097,9 @@ export default function App() {
                 writeLocal("neruvalo.generator", value);
               }}
               login={status.unlocked ? status.login : undefined}
-              server={activeServer}
-              online={status.online}
+              server={status.local ? t("ui.localVault") : activeServer}
+              online={status.online || status.local}
+              local={status.local}
               busy={busy}
               timeout={timeout}
               clipboard={clipboardSeconds}
@@ -1084,6 +1119,7 @@ export default function App() {
                 writeLocal("neruvalo.shortcuts", value);
               }}
             />
+            </div>
           ) : !status.unlocked ? (
             <div className="auth-layout">
               <section className="intro">
@@ -1152,17 +1188,17 @@ export default function App() {
                       void (mode === "register" ? register() : signIn());
                     }}
                   >
-                    {mode === "login" && (
+                    {mode === "login" && !transferSource && (
                       <label>
                         {t("ui.savedAccounts")}
                         <select
-                          value={offline}
+                          value={offlineProfile}
                           onChange={(e) => {
                             setOffline(e.target.value);
                             const p = profiles.find(
                               (p) => p.id === e.target.value,
                             );
-                            if (p) {
+                            if (p && !p.local) {
                               setServer(p.server);
                               setLogin(p.login);
                             }
@@ -1171,19 +1207,19 @@ export default function App() {
                           <option value="">{t("ui.onlineSignIn")}</option>
                           {accessibleProfiles.map((p) => (
                             <option value={p.id} key={p.id}>
-                              {p.login} · {p.server} {t("ui.offline")}
+                              {p.login} · {p.local ? t("ui.localVault") : `${p.server} ${t("ui.offline")}`}
                             </option>
                           ))}
                         </select>
                       </label>
                     )}
-                    {offline && (
+                    {offlineProfile && !profiles.find((p) => p.id === offlineProfile)?.local && (
                       <label>
                         {t("ui.server")}
                         <input readOnly value={server} dir="ltr" />
                       </label>
                     )}
-                    {!offline && (
+                    {!offlineProfile && (
                       <>
                         <label>
                           {t("ui.server")}
@@ -1262,7 +1298,7 @@ export default function App() {
                         required
                       />
                     </label>
-                    {!offline && <VerificationInline
+                    {!offlineProfile && <VerificationInline
                       key={`${mode}:${verificationRevision}`}
                       server={server} login={login} email={mode === "register" ? verificationEmail : ""}
                       kind={mode === "register" ? "register" : "login"}
@@ -1282,7 +1318,7 @@ export default function App() {
                       className="primary full"
                       disabled={
                         busy ||
-                        (!offline && verificationSecret === null) ||
+                        (!offlineProfile && verificationSecret === null) ||
                         certReady ||
                         !configured ||
                         !!launch.startup_error
@@ -1315,6 +1351,8 @@ export default function App() {
                 )}
                 <div className="auth-links">
                   <button
+                    type="button"
+                    className="secondary"
                     disabled={
                       busy || certReady || !configured || !!launch.startup_error
                     }
@@ -1330,6 +1368,8 @@ export default function App() {
                       : t("ui.createAccount")}
                   </button>
                   <button
+                    type="button"
+                    className="secondary"
                     disabled={
                       busy || certReady || !configured || !!launch.startup_error
                     }
@@ -1350,6 +1390,7 @@ export default function App() {
                     {t("ui.recoverAccess")}
                   </button>
                 </div>
+                <div className="auth-local-actions">{localTools}</div>
                 <div className="local-warning">
                   {t("ui.prototypeDoNotStoreRealSecrets")}
                 </div>
@@ -1362,20 +1403,20 @@ export default function App() {
                   <strong>
                     <bdi>{status.login}</bdi>
                   </strong>
-                  <span dir="ltr">{activeServer}</span>
+                  <span dir={status.local ? undefined : "ltr"}>{status.local ? t("ui.localVault") : activeServer}</span>
                   {archive && <small>{t("ui.archive")}</small>}
                 </div>
                 <div className="page-actions">
                   <button
                     className="secondary"
-                    disabled={busy || !status.online || needsSync}
+                    disabled={busy || !(status.online || status.local) || needsSync}
                     onClick={() => requestLeave(() => beginGroup())}
                   >
                     {t("ui.createGroup")}
                   </button>
                   <button
                     className="primary"
-                    disabled={busy || !status.online}
+                    disabled={busy || !(status.online || status.local)}
                     onClick={requestNew}
                   >
                     {t("ui.addEntry")}
@@ -1435,7 +1476,7 @@ export default function App() {
                         void saveGroup();
                       }}
                       onCancel={() => requestLeave(() => setGroupDraft(null))}
-                      disabled={busy || !status.online || needsSync}
+                      disabled={busy || !(status.online || status.local) || needsSync}
                     />
                   ) : draft ? (
                     <>
@@ -1569,7 +1610,7 @@ export default function App() {
                                     type="button"
                                     className="secondary"
                                     disabled={
-                                      busy || !status.online || needsSync
+                                      busy || !(status.online || status.local) || needsSync
                                     }
                                     onClick={() => {
                                       try {
@@ -1673,7 +1714,7 @@ export default function App() {
                         disabled={
                           busy ||
                           needsSync ||
-                          !status.online ||
+                          !(status.online || status.local) ||
                           !draft.title.trim()
                         }
                         onClick={save}
@@ -1803,7 +1844,7 @@ export default function App() {
                           <button
                             className="secondary"
                             disabled={
-                              busy || !status.online || needsSync || archive
+                              busy || !(status.online || status.local) || needsSync || archive
                             }
                             onClick={() => (
                               setDraftGroup(parentOf(selected.data, groups)),
@@ -1822,7 +1863,7 @@ export default function App() {
                           </button>
                           <button
                             className="subtle"
-                            disabled={busy || !status.online || needsSync}
+                            disabled={busy || !(status.online || status.local) || needsSync}
                             onClick={() => setArchived(!archive)}
                           >
                             {archive ? t("ui.restoreFromArchive") : t("ui.archiveEntry")}
@@ -1831,7 +1872,7 @@ export default function App() {
                       ) : (
                         <button
                           className="secondary"
-                          disabled={busy || !status.online || needsSync}
+                          disabled={busy || !(status.online || status.local) || needsSync}
                           onClick={() => setDismissTarget(selected)}
                         >
                           {t("ui.removeForMe")}
@@ -1846,7 +1887,7 @@ export default function App() {
                               entry={v}
                               disabled={
                                 busy ||
-                                !status.online ||
+                                !(status.online || status.local) ||
                                 needsSync ||
                                 selected.archived
                               }
@@ -1882,7 +1923,7 @@ export default function App() {
                           className="primary"
                           disabled={
                             busy ||
-                            !status.online ||
+                            !(status.online || status.local) ||
                             needsSync ||
                             !!selectedGroup.archived
                           }
@@ -1896,7 +1937,7 @@ export default function App() {
                           className="secondary"
                           disabled={
                             busy ||
-                            !status.online ||
+                            !(status.online || status.local) ||
                             needsSync ||
                             !!selectedGroup.archived
                           }
@@ -1906,7 +1947,7 @@ export default function App() {
                         </button>
                         <button
                           className="secondary"
-                          disabled={busy || !status.online || needsSync}
+                          disabled={busy || !(status.online || status.local) || needsSync}
                           onClick={() =>
                             setArchiveRequest({
                               id: selectedGroup.id,

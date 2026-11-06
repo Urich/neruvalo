@@ -1,0 +1,171 @@
+/* Semantic colors shared by every application screen. */
+:root {
+  color-scheme: light;
+  --text: #233d36;
+  --muted: #61746b;
+  --faint: #bac2b6;
+  --canvas: #f8f9f6;
+  --surface: #fff;
+  --header: #fcfcfa;
+  --sidebar: #edf1e9;
+  --border: #dce3dd;
+  --accent: #285e48;
+  --accent-hover: #214e3a;
+  --on-accent: #f4f6e8;
+  --focus: #5a8c75;
+  --focus-ring: #dfece2;
+  --selection: #dfe8d8;
+  --selection-text: #28543f;
+  --selection-edge: #5d8762;
+  --secondary: #edf2e8;
+  --hover: #fafbf7;
+  --pressed: #d1e0cf;
+  --decoration: #7c977b;
+  --success: #5c9771;
+  --success-bg: #eaf2e3;
+  --warning: #a6a08c;
+  --error: #9d5647;
+  --error-bg: #f9eae5;
+  --shadow-small: #28553c12;
+  --shadow-card: #3a4a3110;
+  --shadow-dialog: #1b352540;
+  --backdrop: #19372d66;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --text: #dfe1e5;
+  --muted: #a8adb7;
+  --faint: #818793;
+  --canvas: #1e1f22;
+  --surface: #25262a;
+  --header: #2b2d30;
+  --sidebar: #2b2d30;
+  --border: #43454a;
+  --accent: #3574f0;
+  --accent-hover: #467ff2;
+  --on-accent: #ffffff;
+  --focus: #6b9bfa;
+  --focus-ring: #283b60;
+  --selection: #2e436e;
+  --selection-text: #dfe1e5;
+  --selection-edge: #6b9bfa;
+  --secondary: #34363b;
+  --hover: #323439;
+  --pressed: #3c3f45;
+  --decoration: #a8adb7;
+  --success: #9cc78f;
+  --success-bg: #28392c;
+  --warning: #e2bc78;
+  --error: #f2a1a4;
+  --error-bg: #442b30;
+  --shadow-small: #0003;
+  --shadow-card: #0003;
+  --shadow-dialog: #0006;
+  --backdrop: #111214b3;
+}
+
+:root[data-theme="dark-green"] {
+  color-scheme: dark;
+  --text: #e2ece5;
+  --muted: #a5b9ad;
+  --faint: #82998a;
+  --canvas: #141c18;
+  --surface: #1c2821;
+  --header: #19231d;
+  --sidebar: #17211b;
+  --border: #3c5043;
+  --accent: #9cc6a7;
+  --accent-hover: #b6d9bf;
+  --on-accent: #14251a;
+  --focus: #9cc6a7;
+  --focus-ring: #344c3c;
+  --selection: #304837;
+  --selection-text: #cce8d2;
+  --selection-edge: #9cc6a7;
+  --secondary: #26382b;
+  --hover: #26372d;
+  --pressed: #385340;
+  --decoration: #a8c5ad;
+  --success: #acd39d;
+  --success-bg: #283c28;
+  --warning: #d9c18b;
+  --error: #ffb4a4;
+  --error-bg: #482b29;
+  --shadow-small: #0003;
+  --shadow-card: #0003;
+  --shadow-dialog: #0006;
+  --backdrop: #07110bb3;
+}
+
+:root[data-theme="nord"] {
+  color-scheme: dark;
+  --text: #eceff4;
+  --muted: #c0cad8;
+  --faint: #96a5ba;
+  --canvas: #2e3440;
+  --surface: #3b4252;
+  --header: #343b49;
+  --sidebar: #292f3a;
+  --border: #576478;
+  --accent: #88c0d0;
+  --accent-hover: #a1d3df;
+  --on-accent: #242e3a;
+  --focus: #88c0d0;
+  --focus-ring: #43576b;
+  --selection: #46566e;
+  --selection-text: #e5efff;
+  --selection-edge: #88c0d0;
+  --secondary: #434c5e;
+  --hover: #485368;
+  --pressed: #52627c;
+  --decoration: #8fbcbb;
+  --success: #a3be8c;
+  --success-bg: #364936;
+  --warning: #ebcb8b;
+  --error: #f1adb5;
+  --error-bg: #513842;
+  --shadow-small: #0003;
+  --shadow-card: #0003;
+  --shadow-dialog: #0006;
+  --backdrop: #171c29b3;
+}
+
+:root[data-theme="solarized"] {
+  color-scheme: light;
+  --text: #435a60;
+  --muted: #586e75;
+  --faint: #7a8170;
+  --canvas: #fdf6e3;
+  --surface: #fffbed;
+  --header: #faf2dc;
+  --sidebar: #eee8d5;
+  --border: #d3cbb4;
+  --accent: #006f87;
+  --accent-hover: #005568;
+  --on-accent: #fffbed;
+  --focus: #007e92;
+  --focus-ring: #d5e9df;
+  --selection: #dce8d3;
+  --selection-text: #375c47;
+  --selection-edge: #728600;
+  --secondary: #eee8d5;
+  --hover: #f1ecd9;
+  --pressed: #e1dfbd;
+  --decoration: #597d72;
+  --success: #586c00;
+  --success-bg: #e8eccb;
+  --warning: #806000;
+  --error: #a93632;
+  --error-bg: #fae4d7;
+  --shadow-small: #66512614;
+  --shadow-card: #66512614;
+  --shadow-dialog: #423b2540;
+  --backdrop: #332c2066;
+}
+
+button { color: inherit; }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+input { accent-color: var(--accent); }
+::selection { background: var(--selection); color: var(--selection-text); }
+a { color: var(--selection-text); }

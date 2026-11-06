@@ -276,5 +276,12 @@
   "ui.saveProxy": "儲存代理",
   "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "代理設定已儲存，將套用於後續請求。",
   "ui.couldNotLoadProxySettings": "無法載入代理設定。",
-  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "無法儲存代理設定。請檢查代理位址和類型。"
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "無法儲存代理設定。請檢查代理位址和類型。",
+  "ui.theme": "主題",
+  "ui.theme.system": "跟隨系統",
+  "ui.theme.light": "淺色",
+  "ui.theme.dark": "深色",
+  "ui.theme.nord": "Nord",
+  "ui.theme.dark-green": "深綠色",
+  "ui.theme.solarized": "Solarized Light"
 }

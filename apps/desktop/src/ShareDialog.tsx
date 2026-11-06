@@ -49,7 +49,7 @@ export function ShareDialog({
     try {
       await fn();
     } catch (e) {
-      setError(t(errorText(e)));
+      setError(errorText(e));
     } finally {
       setWorking(false);
     }
@@ -149,7 +149,7 @@ export function ShareDialog({
         </div>
       ))}
       {!recipients.length && <p>{t("ui.noOneHasAccessYet")}</p>}
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{t(error)}</p>}
       <div className="discard-actions">
         <button className="secondary" disabled={working} onClick={onClose}>
           {t("ui.close")}

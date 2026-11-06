@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 // @ts-expect-error The upstream browser module is plain JavaScript.
-import { activationLabel, collectBehavior } from "../../../crates/server/src/verification/widget.js";
-import { languages } from "./i18n";
+import { activationLabel, collectBehavior, configureMessages, GateveriqWidget, selectImages } from "../../../crates/server/src/verification/widget.js";
+import bundle from "../../../crates/server/src/verification/messages.json";
+import { languages, translate } from "./i18n";
 it("labels the real widget checkbox in every application language", async () => {
   const labels: Record<string, string> = {
     "en": "I am human",
@@ -32,4 +33,34 @@ it("labels the real widget checkbox in every application language", async () => 
   expect(activationLabel("ru-RU")).toBe(labels.ru);
   expect(activationLabel("zh-Hans-TW")).toBe(labels["zh-Hans"]);
   expect(activationLabel("zh-TW")).toBe(labels["zh-Hant"]);
+});
+
+afterEach(() => vi.unstubAllGlobals());
+it("localizes PoW success, errors and image controls in all eleven languages", async () => {
+  configureMessages(bundle);
+  class WorkerMock {
+    onmessage?: (event: unknown) => void;
+    postMessage() { queueMicrotask(() => this.onmessage?.({data:{nonce:"0"}})); }
+    terminate() {}
+  }
+  vi.stubGlobal("Worker", WorkerMock);
+  const fetch = vi.fn().mockResolvedValue({ok:true,json:async () => ({verification_token:"verified"})});
+  vi.stubGlobal("fetch", fetch);
+  for (const locale of Object.keys(languages)) {
+    const element = document.createElement("div");
+    const widget = new GateveriqWidget(element);
+    const result = widget.verify({challenge_id:"test",expires_at:Date.now()/1000+60}, {solutionURL:"https://gate.example/solutions",locale});
+    const checkbox = element.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    checkbox.checked = true; checkbox.dispatchEvent(new Event("change"));
+    await expect(result).resolves.toBe("verified");
+    expect(element.textContent).toBe(translate("ui.verificationCompleted", locale));
+    const controller = new AbortController(); controller.abort();
+    await expect(widget.verify({}, {locale,signal:controller.signal})).rejects.toThrow();
+    expect(element.textContent).toBe(translate("ui.verificationFailed", locale));
+    const visualController = new AbortController();
+    const selection = selectImages(element, {instruction_key:"match_reference",reference:"ref",images:["image"],expires_at:Date.now()/1000+60}, visualController.signal, "", {locale});
+    expect(element.querySelector("p")!.textContent).toBe(translate("ui.verificationVisualInstruction", locale));
+    expect(element.querySelector('button[aria-pressed]')!.getAttribute("aria-label")).toBe(translate("ui.verificationImage",locale)+" 1");
+    visualController.abort(); await expect(selection).rejects.toThrow();
+  }
 });

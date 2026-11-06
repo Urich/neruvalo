@@ -276,5 +276,12 @@
   "ui.saveProxy": "Enregistrer le proxy",
   "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "Paramètres du proxy enregistrés. Ils s’appliqueront aux prochaines requêtes.",
   "ui.couldNotLoadProxySettings": "Impossible de charger les paramètres du proxy.",
-  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Impossible d’enregistrer les paramètres. Vérifiez l’adresse et le type du proxy."
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Impossible d’enregistrer les paramètres. Vérifiez l’adresse et le type du proxy.",
+  "ui.theme": "Thème",
+  "ui.theme.system": "Selon le système",
+  "ui.theme.light": "Clair",
+  "ui.theme.dark": "Sombre",
+  "ui.theme.nord": "Nord",
+  "ui.theme.dark-green": "Vert sombre",
+  "ui.theme.solarized": "Solarized Light"
 }

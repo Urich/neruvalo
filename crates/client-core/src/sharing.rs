@@ -263,6 +263,9 @@ pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<Value
 impl Client {
     pub async fn sharing(&mut self) -> Result<Value> {
         let a = self.unlocked()?;
+        if a.profile.kind == ProfileKind::Local {
+            return Ok(json!({"incoming":[],"outgoing":[]}));
+        }
         let state = cached(a).await?;
         let mut incoming = Vec::new();
         if let Some(list) = state["incoming"].as_array() {

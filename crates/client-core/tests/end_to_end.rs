@@ -817,3 +817,157 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
     assert_eq!(owner.history(&id).await.unwrap().len(), 4);
     handle.abort();
 }
+
+#[tokio::test]
+async fn local_vault_backup_history_and_idempotent_server_transfer() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let mut c = Client::new(root.join("client")).unwrap();
+    let status = c.create_local("Personal", password()).await.unwrap();
+    assert_eq!(status["local"], true);
+    assert_eq!(status["online"], false);
+    let local_id = status["profile"].as_str().unwrap().to_owned();
+    let group = c.create_group("Folder".into(), None).await.unwrap()["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let first = c
+        .save_in_group(
+            None,
+            0,
+            data("Local secret", "never plaintext on disk"),
+            false,
+            Some(&group),
+        )
+        .await
+        .unwrap();
+    let id = first["record_id"].as_str().unwrap();
+    c.save_in_group(
+        Some(id.into()),
+        1,
+        data("Updated", "second secret"),
+        false,
+        Some(&group),
+    )
+    .await
+    .unwrap();
+    c.archive_tree(&group, true).await.unwrap();
+    assert!(c.list().await.unwrap()[0].archived);
+    c.archive_tree(&group, false).await.unwrap();
+    assert_eq!(c.history(id).await.unwrap().len(), 4);
+    c.settings(900).await.unwrap();
+    let backup = root.join("vault.nvbackup");
+    assert!(c
+        .export_local_backup(&backup, Zeroizing::new("wrong password".into()))
+        .await
+        .is_err());
+    c.export_local_backup(&backup, password()).await.unwrap();
+    let bytes = std::fs::read(&backup).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("second secret"));
+    assert!(c.export_local_backup(&backup, password()).await.is_err());
+    c.lock();
+    assert!(c
+        .unlock_offline(&local_id, Zeroizing::new("wrong password".into()))
+        .await
+        .is_err());
+    c.unlock_offline(&local_id, password()).await.unwrap();
+    assert_eq!(c.status()["timeout_seconds"], 900);
+    assert_eq!(c.list().await.unwrap()[0].data.title, "Updated");
+    let mut restored = Client::new(root.join("restored")).unwrap();
+    assert!(restored
+        .restore_local_backup(&backup, Zeroizing::new("wrong password".into()))
+        .await
+        .is_err());
+    restored
+        .restore_local_backup(&backup, password())
+        .await
+        .unwrap();
+    assert_eq!(restored.history(id).await.unwrap().len(), 4);
+    assert_eq!(restored.groups().await.unwrap().len(), 1);
+    let mut tampered: Value = serde_json::from_slice(&bytes).unwrap();
+    let ciphertext = tampered["envelope"]["ciphertext"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let replacement = if ciphertext.starts_with('A') {
+        "B"
+    } else {
+        "A"
+    };
+    tampered["envelope"]["ciphertext"] =
+        serde_json::json!(format!("{}{}", replacement, &ciphertext[1..]));
+    let broken = root.join("broken.nvbackup");
+    std::fs::write(&broken, serde_json::to_vec(&tampered).unwrap()).unwrap();
+    assert!(restored
+        .restore_local_backup(&broken, password())
+        .await
+        .is_err());
+    assert_eq!(restored.list().await.unwrap()[0].data.title, "Updated");
+    // Lose the first import response after the server commits it.
+    let app = neruvalo_server::application(
+        &neruvalo_client::sqlite_database_url(&root.join("server.sqlite3")).unwrap(),
+        root.join("outbox"),
+    )
+    .await
+    .unwrap();
+    let lose_response = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let app = app.layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let lose_response = lose_response.clone();
+            async move {
+                let import = request.uri().path() == "/api/v1/vault/import";
+                let response = next.run(request).await;
+                if import && lose_response.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    use axum::response::IntoResponse;
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response()
+                } else {
+                    response
+                }
+            }
+        },
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    register(&mut c, &server, "localmigrate", root).await;
+    c.login(&server, "localmigrate", password()).await.unwrap();
+    c.save(None, 0, data("Existing", "server data"), false)
+        .await
+        .unwrap();
+    assert!(c
+        .import_local(&local_id, Zeroizing::new("wrong password".into()))
+        .await
+        .is_err());
+    assert!(c.import_local(&local_id, password()).await.is_err());
+    // Retry uses the persisted encrypted operation instead of creating new IDs.
+    c.import_local(&local_id, password()).await.unwrap();
+    let imported = c.list().await.unwrap();
+    assert_eq!(imported.len(), 2);
+    let migrated = imported.iter().find(|v| v.data.title == "Updated").unwrap();
+    assert_ne!(migrated.record_id, id);
+    assert_eq!(c.history(&migrated.record_id).await.unwrap().len(), 4);
+    assert_eq!(c.groups().await.unwrap().len(), 1);
+    c.import_local(&local_id, password()).await.unwrap();
+    assert_eq!(c.list().await.unwrap().len(), 2);
+    c.unlock_offline(&local_id, password()).await.unwrap();
+    assert_eq!(c.list().await.unwrap().len(), 1);
+    c.save_in_group(
+        Some(id.into()),
+        4,
+        data("Later local edit", "new"),
+        false,
+        Some(&group),
+    )
+    .await
+    .unwrap();
+    c.login(&server, "localmigrate", password()).await.unwrap();
+    c.import_local(&local_id, password()).await.unwrap();
+    assert_eq!(c.list().await.unwrap().len(), 2);
+    assert!(c
+        .list()
+        .await
+        .unwrap()
+        .iter()
+        .any(|v| v.data.title == "Later local edit"));
+    task.abort();
+}

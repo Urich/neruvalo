@@ -21,6 +21,21 @@ const visualMessages = {
     activate: 'Подтвердить запрос',
   },
 };
+const legacyInstruction = visualMessages.en.instruction;
+/** Shared with the desktop catalogs; called before mounting the widget. */
+export function configureMessages(bundle) {
+  for (const [language, values] of Object.entries(bundle.translations)) {
+    const t = Object.fromEntries(bundle.keys.map((key, index) => [key, values[index]]));
+    visualMessages[language] = {
+      instruction:t.verificationVisualInstruction, reference:t.verificationReference,
+      image:t.verificationImage, confirm:t.verificationConfirmSelection,
+      checking:t.verificationChecking, completed:t.verificationCompleted,
+      retry:t.verificationSelectionRetry, expired:t.verificationExpired,
+      exhausted:t.verificationExpired, cancelled:t.verificationCancelled,
+      failed:t.verificationFailed,
+    };
+  }
+}
 // Neruvalo customization: checkbox text follows all application languages.
 const activationMessages = {
   "en": "I am human",
@@ -50,8 +65,12 @@ export function resolveLocale(element, locale) {
   const candidates = preferred ? [preferred] :
     [...(globalThis.navigator?.languages || []), globalThis.navigator?.language];
   for (const candidate of candidates) {
-    const language = typeof candidate === 'string' ? candidate.trim().toLowerCase().split(/[-_]/)[0] : '';
-    if (Object.hasOwn(visualMessages, language)) return language;
+    const normalized = typeof candidate === 'string' ? candidate.trim().replaceAll('_', '-').toLowerCase() : '';
+    const parts = normalized.split('-');
+    const preferred = parts[0] === 'zh'
+      ? ((!parts.includes('hans') && parts.some(part => ['hant', 'tw', 'hk', 'mo'].includes(part))) ? 'zh-Hant' : 'zh-Hans')
+      : parts[0];
+    if (Object.hasOwn(visualMessages, preferred)) return preferred;
   }
   return 'en';
 }
@@ -130,11 +149,12 @@ export class GateveriqWidget {
     let stopLoading;
     const cancel=()=>this.cancel(); signal?.addEventListener('abort',cancel,{once:true});
     this.element.setAttribute('role','status'); this.element.setAttribute('aria-live','polite');
-    this.element.textContent='Checking request…';
+    const t = visualMessages[resolveLocale(this.element, locale)];
+    this.element.textContent=t.checking;
     try {
       if(signal?.aborted) throw Error('Cancelled');
       const behavior = await collectBehavior(this.element, challenge, this.controller.signal, locale);
-      stopLoading = showLoading(this.element);
+      stopLoading = showLoading(this.element, t.checking);
       const nonce=await new Promise((resolve,reject)=>{
         this.reject=reject; this.worker=new Worker(workerURL);
         this.worker.onmessage=({data})=>data.error?reject(Error(data.error)):resolve(data.nonce);
@@ -152,8 +172,8 @@ export class GateveriqWidget {
       }
       if(!response.ok) throw Error(result.error?.code || 'Verification failed');
       if (typeof result.verification_token !== 'string' || !result.verification_token) throw Error('Missing verification token');
-      this.element.textContent='Request checked';return result.verification_token;
-    } catch(error){this.element.textContent='Check failed. Please try again.';throw error;}
+      this.element.textContent=t.completed;return result.verification_token;
+    } catch(error){this.element.textContent=t.failed;throw error;}
     finally{stopLoading?.();this.worker?.terminate();this.reject=null;this.running=false;signal?.removeEventListener('abort',cancel);}
   }
 }
@@ -189,7 +209,7 @@ export function selectImages(element, visual, signal, message = '', {locale} = {
     const selected = new Set();
     const heading = document.createElement('p');
     heading.textContent = visual.instruction_key === 'match_reference'
-      || visual.instruction === visualMessages.en.instruction ? t.instruction : visual.instruction;
+      || visual.instruction === legacyInstruction || visual.instruction === visualMessages.en.instruction ? t.instruction : visual.instruction;
     const reference = document.createElement('img'); reference.src = visual.reference;
     reference.alt = t.reference; reference.width = 112; reference.height = 112;
     reference.style.borderRadius = '14px'; reference.style.objectFit = 'contain';

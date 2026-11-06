@@ -276,5 +276,12 @@
   "ui.saveProxy": "Save proxy",
   "ui.proxySettingsSavedTheyApplyToSubsequentRequests": "Proxy settings saved. They apply to subsequent requests.",
   "ui.couldNotLoadProxySettings": "Could not load proxy settings.",
-  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Could not save proxy settings. Check the proxy address and type."
+  "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType": "Could not save proxy settings. Check the proxy address and type.",
+  "ui.theme": "Theme",
+  "ui.theme.system": "Follow system",
+  "ui.theme.light": "Light",
+  "ui.theme.dark": "Dark",
+  "ui.theme.nord": "Nord",
+  "ui.theme.dark-green": "Dark green",
+  "ui.theme.solarized": "Solarized Light"
 }

@@ -1,3 +1,4 @@
+import { catalogs } from "./i18n";
 export type Data = {
   record_type: string;
   schema_version: number;
@@ -20,7 +21,7 @@ export type Entry = {
   archived: boolean;
   data: Data;
 };
-export type Profile = { id: string; login: string; server: string };
+export type Profile = { id: string; login: string; server: string; local?: boolean };
 export const types: Record<
   string,
   { label: string; icon: string; fields: [string, string, boolean, boolean?][] }
@@ -132,7 +133,27 @@ export function filterEntries(
   );
 }
 export function errorText(error: unknown): string {
-  const s = error instanceof Error ? error.message : String(error);
+  const s = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, "");
+  if (Object.hasOwn(catalogs.en, s)) return s;
+  const messages: [RegExp, string][] = [
+    [/incorrect secret or damaged data|INVALID_PASSWORD/i, "incorrectPasswordOrDamagedData"],
+    [/master password of at least 12/i, "masterPasswordTooShort"],
+    [/INVALID_VAULT_NAME/, "invalidVaultName"],
+    [/INVALID_BACKUP|invalid (?:salt|nonce|root key)|invalid profile|Invalid recovery secret/i, "invalidBackup"],
+    [/BACKUP_TOO_LARGE/, "backupTooLarge"],
+    [/IMPORT_TOO_LARGE/, "importTooLarge"],
+    [/already exists|os error (?:80|183)\b/i, "backupFileExists"],
+    [/Title is required/i, "recordTitleRequired"],
+    [/Invalid server URL|HTTPS is required|Use the server origin|relative URL without a base|empty host|invalid port/i, "invalidServerAddress"],
+    [/ONLINE_LOGIN_REQUIRED|LOCAL_PROFILE_REQUIRED/, "onlineLoginRequired"],
+    [/SAVE_RESULT_UNKNOWN/, "saveResultUnknown"],
+    [/VERIFICATION_EXPIRED/, "verificationExpired"],
+    [/VERIFICATION_CANCELLED/, "verificationCancelled"],
+    [/VERIFICATION_|Missing verification token|Worker failed/, "verificationFailed"],
+    [/ACCESS_DENIED|FORBIDDEN/, "accessDenied"],
+    [/Record exceeds|Server response too large/, "dataTooLarge"],
+  ];
+  for (const [pattern, key] of messages) if (pattern.test(s)) return `ui.${key}`;
   if (s.includes("INVALID_PROXY_CONFIG"))
     return "ui.couldNotSaveProxySettingsCheckTheProxyAddressAndType";
   if (s.includes("SHARING_VERSION_MISMATCH"))
@@ -173,7 +194,5 @@ export function errorText(error: unknown): string {
   if (s.includes("OFFLINE_READ_ONLY"))
     return "ui.offlineAccessIsReadOnly";
   if (s.includes("LOCKED")) return "ui.vaultIsLocked";
-  return /^[A-Z][A-Z_]{3,}$/.test(s)
-    ? "ui.operationFailedCheckYourConnectionAndTryAgain"
-    : s;
+  return "ui.operationFailedCheckYourConnectionAndTryAgain";
 }

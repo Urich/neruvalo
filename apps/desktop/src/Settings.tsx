@@ -3,6 +3,7 @@ import { GeneratorSettings } from "./GeneratorSettings";
 import { GeneratorOptions } from "./passwordGenerator";
 import { useState } from "react";
 import { languages, useI18n } from "./i18n";
+import { themes, useTheme } from "./theme";
 import {
   defaultShortcuts,
   fromEvent,
@@ -16,6 +17,7 @@ export function Settings({
   login,
   server,
   online,
+  local,
   busy,
   timeout,
   clipboard,
@@ -35,6 +37,7 @@ export function Settings({
   login?: string;
   server: string;
   online?: boolean;
+  local?: boolean;
   busy: boolean;
   timeout: number;
   clipboard: number;
@@ -44,6 +47,7 @@ export function Settings({
   onShortcuts: (s: Shortcuts) => void;
 }) {
   const { t, preference, setPreference } = useI18n();
+  const { theme, setTheme } = useTheme();
   const [capture, setCapture] = useState<"login" | "password" | null>(null);
   const [error, setError] = useState("");
   return (
@@ -71,7 +75,7 @@ export function Settings({
             </select>
           </label>
           <p className="muted">
-            {t("ui.accountSettingSavedOnServer")}
+            {t(local ? "ui.settingForThisDevice" : "ui.accountSettingSavedOnServer")}
           </p>
           <label>
             {t("ui.clearClipboard")}
@@ -92,6 +96,15 @@ export function Settings({
       <ProxySettings load={loadProxy} save={saveProxy} disabled={busy} />
       <GeneratorSettings value={generator} onChange={onGenerator} />
       <h2>{t("ui.interface")}</h2>
+      <label>
+        {t("ui.theme")}
+        <select value={theme} onChange={(e) => setTheme(e.target.value)}>
+          {themes.map((value) => (
+            <option key={value} value={value}>{t(`ui.theme.${value}`)}</option>
+          ))}
+        </select>
+      </label>
+      <p className="muted">{t("ui.settingForThisDevice")}</p>
       <label>
         {t("ui.language")}
         <select
