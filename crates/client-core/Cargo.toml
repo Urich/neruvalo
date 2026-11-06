@@ -17,10 +17,12 @@ neruvalo-crypto.workspace = true
 neruvalo-protocol.workspace = true
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
+keepass = { path = "../../third-party/keepass", version = "=0.17.0" }
 [dev-dependencies]
 neruvalo-server.workspace = true
 tempfile = "3"
 axum = "0.8"
+keepass = { path = "../../third-party/keepass", version = "=0.17.0", features = ["save_kdbx4"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

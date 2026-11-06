@@ -72,6 +72,7 @@ const paths: Record<string, ReactNode> = {
       <circle cx="12" cy="12" r="3" />
     </>
   ),
+  import: <><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" /></>,
   folder: <path d="M2 6a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v11H2Z" />,
   archive: (
     <>

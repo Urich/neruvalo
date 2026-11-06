@@ -638,6 +638,54 @@ describe("stale status response after lock", () => {
 });
 
 describe("archive confirmation and About", () => {
+  async function confirmArchive(selector: string) {
+    const row = document.querySelector<HTMLElement>(selector)!;
+    await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", {bubbles:true, clientX:20, clientY:20})));
+    await click(button(translate("ui.archiveEntry"), document.querySelector('[role="menu"]')!));
+    await click(button(translate("ui.continue"), document.querySelector("dialog")!));
+  }
+  it.each([
+    ['[data-record-id="One"]', "One"],
+    ['[data-group-id="legacy:Banks"]', "Two"],
+  ])("hides %s immediately while the archive request is pending", async (selector, id) => {
+    await mount(); await login();
+    const original = native.invoke.getMockImplementation()!;
+    let finish!: () => void;
+    native.invoke.mockImplementation((...args) => args[1].request.action === "archive_tree"
+      ? new Promise(resolve => { finish = () => { native.records = native.records.map(e => e.record_id === id ? {...e,archived:true} : e); resolve(true); }; })
+      : original(...args));
+    await confirmArchive(selector);
+    expect(document.querySelector(selector)).toBeNull();
+    expect(document.querySelector(`[data-record-id="${id}"]`)).toBeNull();
+    expect(document.querySelector(`[data-record-id="${id === "One" ? "Two" : "One"}"]`)).not.toBeNull();
+    expect(native.records.find(e => e.record_id === id)?.archived).toBe(false);
+    await act(async () => finish());
+    expect(document.querySelector(`[data-record-id="${id}"]`)).toBeNull();
+  });
+  it("returns the entry to the list on archive failure", async () => {
+    await mount(); await login();
+    const original = native.invoke.getMockImplementation()!;
+    let fail!: (reason: Error) => void;
+    native.invoke.mockImplementation((...args) => args[1].request.action === "archive_tree"
+      ? new Promise((_resolve, reject) => { fail = reject; }) : original(...args));
+    await confirmArchive('[data-record-id="One"]');
+    expect(document.querySelector('[data-record-id="One"]')).toBeNull();
+    await act(async () => fail(Error("connection lost")));
+    expect(document.querySelector('[data-record-id="One"]')).not.toBeNull();
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+  });
+  it("does not restore hidden records after locking during an archive request", async () => {
+    await mount(); await login();
+    const original = native.invoke.getMockImplementation()!;
+    let fail!: (reason: Error) => void;
+    native.invoke.mockImplementation((...args) => args[1].request.action === "archive_tree"
+      ? new Promise((_resolve, reject) => { fail = reject; }) : original(...args));
+    await confirmArchive('[data-record-id="One"]');
+    await act(async () => { native.unlocked = false; native.lock!(); });
+    await act(async () => fail(Error("connection lost")));
+    expect(document.querySelector('[role="tree"]')).toBeNull();
+    expect(document.querySelector('[data-record-id="One"]')).toBeNull();
+  });
   it("targets the right-clicked group and cancels without a write", async () => {
     await mount();
     await login();
@@ -956,4 +1004,21 @@ it("creates and edits a local vault without requesting a server or bot check", a
   expect(native.invoke.mock.calls.some(([, args]) => args.request.action === "unlock_offline")).toBe(false);
   expect(document.querySelector(".local-vault-dialog")?.textContent).toContain("Import local vault");
   expect(document.querySelector<HTMLSelectElement>('.local-vault-dialog select')?.value).toBe("local-1");
+});
+
+it("places Import above Settings and groups import sources on their own page", async () => {
+  setPreference("en");
+  await mount(); await login();
+  const navigation = [...document.querySelectorAll<HTMLButtonElement>(".sidebar-bottom button")];
+  const imports = navigation.findIndex(b => b.textContent?.trim() === "Import");
+  const settings = navigation.findIndex(b => b.textContent?.trim() === "Settings");
+  expect(imports).toBeGreaterThanOrEqual(0);
+  expect(imports).toBeLessThan(settings);
+  expect(document.querySelector(".vault-toolbar")?.textContent).not.toContain("Import KeePass");
+  await click(navigation[imports]);
+  expect(document.querySelector(".imports-page")).not.toBeNull();
+  expect(document.querySelector(".imports-page")?.textContent).toContain("Import KeePass");
+  expect(document.querySelector(".imports-page")?.textContent).toContain("Import local vault");
+  expect(document.querySelector(".imports-page")?.textContent).toContain("Restore from backup");
+  expect(document.querySelector(".imports-page dialog")).toBeNull();
 });

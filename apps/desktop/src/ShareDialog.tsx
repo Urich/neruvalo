@@ -73,6 +73,7 @@ export function ShareDialog({
           "ui.theRecipientWillSeeAllFieldsAndNotesYourGroupsAndTagsAreExcluded",
         )}
       </p>
+      <p>{t("ui.attachmentsShared")}</p>
       {wallet && (
         <p role="alert">
           {t(

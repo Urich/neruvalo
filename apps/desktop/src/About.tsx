@@ -60,7 +60,7 @@ export function About() {
         </dd>
         <dt>{t("ui.compatibility")}</dt>
         <dd>
-          {t("ui.protocol")}: 2 · {t("ui.recordFormat")}: 1 · {t("ui.groupFormat")}: 2
+            {t("ui.protocol")}: 2 · {t("ui.recordFormat")}: 1–2 · {t("ui.groupFormat")}: 2
         </dd>
       </dl>
       <p>Urich &amp; contributors · AGPL-3.0-only</p>

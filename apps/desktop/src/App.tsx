@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HistoryVersion } from "./HistoryVersion";
+import { Attachments } from "./Attachments";
 import { ConfirmNewEntry } from "./ConfirmNewEntry";
 import { VerificationInline } from "./VerificationInline";
 import { VerificationDialog } from "./VerificationDialog";
@@ -15,6 +16,7 @@ import { DismissShare } from "./DismissShare";
 import { ShareDialog, Recipient } from "./ShareDialog";
 import { LocalVaultTools } from "./LocalVaultTools";
 import { Settings } from "./Settings";
+import { Imports } from "./Imports";
 import { ContextMenu, MenuItem } from "./ContextMenu";
 import {
   Group,
@@ -23,6 +25,7 @@ import {
   groupLabel,
   entryTree,
   archiveSelection,
+  archiveMembers,
 } from "./groups";
 import { EntryTree } from "./EntryTree";
 import { GroupEditor, GroupDraft } from "./GroupEditor";
@@ -61,7 +64,7 @@ export default function App() {
     normalizeGenerator(readLocal("neruvalo.generator", null)),
   );
   const [transferSource, setTransferSource] = useState("");
-  const [page, setPage] = useState<"vault" | "settings" | "about">("vault");
+  const [page, setPage] = useState<"vault" | "imports" | "settings" | "about">("vault");
   const [treeReveal, setTreeReveal] = useState(0);
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
@@ -86,6 +89,9 @@ export default function App() {
     action: () => void;
   } | null>(null);
   const [status, setStatus] = useState<Status>({ unlocked: false });
+  useEffect(() => {
+    if (transferSource && status.unlocked && status.online && !status.local) setPage("imports");
+  }, [transferSource, status.unlocked, status.online, status.local]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [server, setServer] = useState("");
   const [login, setLogin] = useState("");
@@ -128,6 +134,7 @@ export default function App() {
     archived: boolean;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pendingArchive, setPendingArchive] = useState<Set<string> | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
@@ -137,6 +144,10 @@ export default function App() {
     readLocal("neruvalo.clipboardSeconds", 30),
   );
   const generation = useRef(0);
+  const detailPanel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (detailPanel.current) detailPanel.current.scrollTop = 0;
+  }, [selected?.record_id, !!draft, draft?.record_type, !!groupDraft, activeGroup]);
   const lastTouch = useRef(0);
   const wasUnlocked = useRef(false);
   const clear = () => {
@@ -153,6 +164,7 @@ export default function App() {
     setDraft(undefined);
     setPendingNew(null);
     setArchiveRequest(null);
+    setPendingArchive(null);
     setPendingAction(null);
     setMenu(null);
     setPage("vault");
@@ -728,29 +740,39 @@ export default function App() {
     );
   }
   async function applyArchive() {
-    if (!archiveRequest) return;
+    if (!archiveRequest || busy || pendingArchive) return;
     const request = archiveRequest;
     const epoch = generation.current;
+    const members = archiveMembers(request.id, groups, entries);
     setArchiveRequest(null);
-    await run(async () => {
-      await call("archive_tree", {
-        id: request.id,
-        archived: request.archived,
-      });
-      if (epoch !== generation.current) return;
+    setPendingArchive(members);
+    if (selected && members.has(selected.record_id)) {
       setSelected(undefined);
-      setActiveGroup(null);
       setHistory([]);
-      await refresh();
-    });
+      setRevealed({});
+    }
+    if (activeGroup && members.has(activeGroup)) setActiveGroup(null);
+    try {
+      await run(async () => {
+        await call("archive_tree", {
+          id: request.id,
+          archived: request.archived,
+        });
+        if (epoch !== generation.current) return;
+        await refresh();
+      });
+    } finally {
+      if (epoch === generation.current) setPendingArchive(null);
+    }
   }
 
   const groups = groupsFor(entries, savedGroups);
+  const displayedEntries = entries.filter((entry) => !pendingArchive?.has(entry.record_id));
   const tree = entryTree(
-    shareView === "received" ? [] : groups,
+    shareView === "received" ? [] : groups.filter((group) => !pendingArchive?.has(group.id)),
     shareView === "received"
       ? received
-      : entries.filter((e) => shareView !== "outgoing" || !!e.share_count),
+      : displayedEntries.filter((e) => shareView !== "outgoing" || !!e.share_count),
     query,
     kind,
     shareView === "received" ? false : archive,
@@ -796,7 +818,7 @@ export default function App() {
       />);
   return (
     <div
-      className="app"
+      className={status.unlocked && page === "vault" ? "app vault-screen" : "app"}
       lang={language}
       dir={language === "ar" ? "rtl" : "ltr"}
       onContextMenu={context}
@@ -921,7 +943,7 @@ export default function App() {
               }}
             >
               <Icon name="all" /> <span>{t("ui.allEntries")}</span>
-              <b>{entries.filter((e) => !e.archived).length}</b>
+              <b>{displayedEntries.filter((e) => !e.archived).length}</b>
             </button>
             <button
               className={archive ? "nav active" : "nav"}
@@ -965,7 +987,7 @@ export default function App() {
                 <b>
                   {view === "received"
                     ? received.length
-                    : entries.filter((e) => e.share_count).length}
+                    : displayedEntries.filter((e) => e.share_count).length}
                 </b>
               </button>
             ))}
@@ -993,6 +1015,11 @@ export default function App() {
           </>
         )}
         <div className="sidebar-bottom">
+          <button className={page === "imports" ? "nav active" : "nav"}
+            aria-current={page === "imports" ? "page" : undefined}
+            onClick={() => requestLeave(() => setPage("imports"))}>
+            <Icon name="import" /><span>{t("ui.imports")}</span>
+          </button>
           <button
             className={page === "settings" ? "nav active" : "nav"}
             onClick={() => setPage(page === "settings" ? "vault" : "settings")}
@@ -1022,7 +1049,7 @@ export default function App() {
         <header className={status.unlocked ? "vault-toolbar" : undefined}>
           <div className="breadcrumb">
             {t("ui.personalSpace")}
-            <span>/</span> {archive ? t("ui.archive") : t("ui.vault")}
+            <span>/</span> {page === "imports" ? t("ui.imports") : archive ? t("ui.archive") : t("ui.vault")}
           </div>
           <div className="connection">
             <i className={status.online ? "online" : ""} />
@@ -1084,6 +1111,9 @@ export default function App() {
           )}
           {page === "about" ? (
             <About />
+          ) : page === "imports" ? (
+            <Imports status={status} profiles={profiles} source={transferSource} busy={busy || needsSync}
+              onSource={setTransferSource} onChanged={async () => { await refresh(); setProfiles(await call("profiles")); }} />
           ) : page === "settings" ? (
             <div>
             <Settings
@@ -1466,7 +1496,7 @@ export default function App() {
                     </div>
                   )}
                 </section>
-                <section className="detail-panel">
+                <section className="detail-panel" ref={detailPanel}>
                   {groupDraft ? (
                     <GroupEditor
                       draft={groupDraft}
@@ -1498,7 +1528,7 @@ export default function App() {
                         disabled={!!selected}
                         onChange={(key) =>
                           requestLeave(() => {
-                            setDraft({ ...empty(key), folder: draft.folder });
+                            setDraft({ ...empty(key), folder: draft.folder, ...(draft.attachments ? { attachments: draft.attachments, schema_version: 2 } : {}) });
                             setCustomName("");
                           })
                         }
@@ -1674,6 +1704,9 @@ export default function App() {
                           }
                         />
                       </label>
+                      <Attachments key={`draft-${status.profile}-${selected?.record_id ?? "new"}`} items={draft.attachments} profile={status.profile}
+                        disabled={busy || needsSync || !(status.online || status.local)}
+                        onChange={(attachments) => setDraft({ ...draft, schema_version: 2, attachments })} />
                       <div className="two">
                         <label>
                           {t("ui.group")}
@@ -1805,6 +1838,7 @@ export default function App() {
                           </bdi>
                         </p>
                       )}
+                      <Attachments key={`${status.profile}-${selected.record_id}-${selected.version_id}`} items={selected.data.attachments} profile={status.profile} disabled={busy} />
                       {selected.data.notes && (
                         <div className="field">
                           <small>{t("ui.notes")}</small>
@@ -1885,6 +1919,7 @@ export default function App() {
                             <HistoryVersion
                               key={v.version_id}
                               entry={v}
+                              profile={status.profile}
                               disabled={
                                 busy ||
                                 !(status.online || status.local) ||

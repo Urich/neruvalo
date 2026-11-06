@@ -4,10 +4,12 @@ import { useI18n } from "./i18n";
 import { errorText, Profile } from "./model";
 
 type Action = "connect" | "create_local" | "restore_local_backup" | "export_local_backup" | "import_local";
-export function LocalVaultTools({ status, profiles, source, onSource, onChanged, onConnect, busy: parentBusy = false, toolbar = false }: {
+export function LocalVaultTools({ status, profiles, source, onSource, onChanged, onConnect, busy: parentBusy = false, toolbar = false, importsOnly = false, restoreOnly = false }: {
   status: { unlocked: boolean; local?: boolean; online?: boolean; profile?: string };
   busy?: boolean;
   toolbar?: boolean;
+  importsOnly?: boolean;
+  restoreOnly?: boolean;
   profiles: Profile[]; source: string; onSource: (id: string) => void;
   onChanged: () => Promise<void>; onConnect: () => Promise<void>;
 }) {
@@ -28,7 +30,7 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
   function open(next: Action) { setError(""); setNotice(""); setPassword(""); setConfirmation(""); setAction(next); }
   function close() { if (!busy) { if (action === "import_local") onSource(""); setAction(null); setPassword(""); setConfirmation(""); } }
   useEffect(() => {
-    if (source && status.unlocked && status.online && !status.local) open("import_local");
+    if (importsOnly && source && status.unlocked && status.online && !status.local) open("import_local");
   }, [source, status.profile]);
   useEffect(() => {
     if (!action) return;
@@ -53,21 +55,21 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
       await onChanged();
       setAction(null); setPassword(""); setConfirmation("");
       if (action === "import_local") onSource("");
-      setNotice(action === "export_local_backup" ? "ui.backupSaved" : action === "import_local" ? "ui.localImportComplete" : "ui.localVaultReady");
+      if (action !== "import_local") setNotice(action === "export_local_backup" ? "ui.backupSaved" : "ui.localVaultReady");
     } catch (e) { setError(errorText(e)); }
     finally { setBusy(false); }
   }
   return <div className={toolbar ? "local-vault-tools local-vault-toolbar" : "local-vault-tools"}>
-    {!status.unlocked && <>
-      <button type="button" className={toolbar ? "subtle" : "secondary"} disabled={parentBusy} onClick={() => open("create_local")}>{t("ui.createLocalVault")}</button>
+    {!importsOnly && !status.unlocked && <>
+      {!restoreOnly && <button type="button" className={toolbar ? "subtle" : "secondary"} disabled={parentBusy} onClick={() => open("create_local")}>{t("ui.createLocalVault")}</button>}
       <button type="button" className={toolbar ? "subtle" : "secondary"} disabled={parentBusy} onClick={() => open("restore_local_backup")}>{t("ui.restoreLocalBackup")}</button>
     </>}
-    {status.local && <>
+    {!importsOnly && !restoreOnly && status.local && <>
       {!toolbar && <p>{t("ui.localVaultDescription")}</p>}
       <button type="button" className={toolbar ? "subtle" : "secondary"} disabled={parentBusy} onClick={() => open("export_local_backup")}>{t("ui.exportLocalBackup")}</button>
       <button type="button" className={toolbar ? "subtle" : "secondary"} disabled={parentBusy || busy} onClick={() => open("connect")}>{t("ui.connectLocalVault")}</button>
     </>}
-    {status.unlocked && status.online && !status.local && localProfiles.length > 0 &&
+    {importsOnly && status.unlocked && status.online && !status.local && localProfiles.length > 0 &&
       <button type="button" className={toolbar ? "subtle" : "secondary"} disabled={parentBusy} onClick={() => { if (!source) onSource(localProfiles[0].id); open("import_local"); }}>{t("ui.importLocalVault")}</button>}
     {notice && <p role="status">{t(notice)}</p>}
     {error && !action && <p role="alert">{t(error)}</p>}

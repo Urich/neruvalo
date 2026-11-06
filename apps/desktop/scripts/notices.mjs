@@ -36,7 +36,7 @@ function texts(dir, depth = 0) {
   return result;
 }
 const components = metadata.packages
-  .filter((p) => p.source)
+  .filter((p) => p.source || p.manifest_path.replaceAll("\\", "/").includes("/third-party/"))
   .map((p) => ({
     name: p.name,
     version: p.version,

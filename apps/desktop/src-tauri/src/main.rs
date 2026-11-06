@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use anyhow::{anyhow, Result};
-use neruvalo_client::{Client, RecordData};
+use neruvalo_client::{Attachment, Client, RecordData};
 use serde_json::{json, Value};
 use std::{
     path::PathBuf,
@@ -90,6 +90,14 @@ async fn command(
                 | "settings"
                 | "export_local_backup"
                 | "import_local"
+                | "pick_attachment"
+                | "save_attachment"
+                | "keepass_prepare"
+                | "keepass_status"
+                | "keepass_commit"
+                | "keepass_cancel"
+                | "keepass_last_report"
+                | "keepass_open_report"
         ) {
             let status = c.status();
             launch::check_profile(r["expected_profile"].as_str(), status["profile"].as_str())?;
@@ -115,6 +123,88 @@ async fn command(
             }
         }
         match text(r, "action")?.as_str() {
+            "keepass_status" => Ok(serde_json::to_value(c.keepass_import_status().await?)?),
+            "keepass_last_report" => Ok(serde_json::to_value(c.keepass_last_report().await?)?),
+            "keepass_open_report" => {
+                let labels = serde_json::from_value(r["labels"].take())?;
+                let html = c.keepass_report_html(&text(r, "ticket")?, &labels).await?;
+                let directory = app.path().app_cache_dir()?.join("import-reports");
+                std::fs::create_dir_all(&directory)?;
+                let path = directory.join(format!("keepass-{}.html", uuid_for_report()));
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                use std::io::Write;
+                options.open(&path)?.write_all(html.as_bytes())?;
+                let url = tauri::Url::from_file_path(&path)
+                    .map_err(|_| anyhow!("Invalid report path"))?;
+                open_browser_url(url.as_str())?;
+                Ok(json!(true))
+            }
+            "keepass_cancel" => {
+                c.cancel_keepass_import(&text(r, "ticket")?).await?;
+                Ok(json!(true))
+            }
+            "keepass_commit" => c.commit_keepass_import(&text(r, "ticket")?).await,
+            "keepass_prepare" => {
+                let password = secret(r, "password")?;
+                let folder = text(r, "folder")?;
+                let Some(path) = app
+                    .dialog()
+                    .file()
+                    .add_filter("KeePass KDBX", &["kdbx"])
+                    .blocking_pick_file()
+                else {
+                    return Ok(Value::Null);
+                };
+                let keyfile = if r["use_keyfile"] == true {
+                    let Some(keyfile) = app.dialog().file().blocking_pick_file() else {
+                        return Ok(Value::Null);
+                    };
+                    Some(keyfile.into_path().map_err(|_| anyhow!("Invalid path"))?)
+                } else {
+                    None
+                };
+                Ok(serde_json::to_value(
+                    c.prepare_keepass_import(
+                        path.into_path().map_err(|_| anyhow!("Invalid path"))?,
+                        password,
+                        keyfile,
+                        folder,
+                    )
+                    .await?,
+                )?)
+            }
+            "pick_attachment" => {
+                anyhow::ensure!(c.status()["unlocked"] == true, "Vault is locked");
+                let Some(path) = app.dialog().file().blocking_pick_file() else {
+                    return Ok(Value::Null);
+                };
+                anyhow::ensure!(c.status()["unlocked"] == true, "LOCKED");
+                Ok(serde_json::to_value(Attachment::from_file(
+                    &path.into_path().map_err(|_| anyhow!("Invalid path"))?,
+                )?)?)
+            }
+            "save_attachment" => {
+                anyhow::ensure!(c.status()["unlocked"] == true, "Vault is locked");
+                let attachment: Attachment = serde_json::from_value(r["attachment"].take())?;
+                attachment.validate()?;
+                let Some(path) = app
+                    .dialog()
+                    .file()
+                    .set_file_name(&attachment.name)
+                    .blocking_save_file()
+                else {
+                    return Ok(json!(false));
+                };
+                anyhow::ensure!(c.status()["unlocked"] == true, "LOCKED");
+                attachment.save_to(&path.into_path().map_err(|_| anyhow!("Invalid path"))?)?;
+                Ok(json!(true))
+            }
             "create_local" => {
                 c.create_local(&text(r, "name")?, secret(r, "password")?)
                     .await
@@ -172,7 +262,7 @@ async fn command(
             "proxy_settings" => c.proxy_settings(),
             "set_proxy" => c.set_proxy(serde_json::from_value(r["settings"].clone())?),
             "about" => Ok(
-                serde_json::json!({"version":env!("CARGO_PKG_VERSION"), "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":2,"record_format":1,"group_format":2}),
+                serde_json::json!({"version":env!("CARGO_PKG_VERSION"), "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":2,"record_format":2,"group_format":2}),
             ),
             "status" => Ok(c.status()),
             "touch" => {
@@ -445,13 +535,22 @@ fn open_project_link(target: &str, commit: Option<&str>) -> anyhow::Result<()> {
         ),
         _ => anyhow::bail!("Invalid project link"),
     };
+    open_browser_url(&url)
+}
+
+fn uuid_for_report() -> String {
+    // A random token avoids collisions without using source file names in paths.
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn open_browser_url(url: &str) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     std::process::Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", &url])
+        .args(["url.dll,FileProtocolHandler", url])
         .spawn()?;
     #[cfg(target_os = "macos")]
-    std::process::Command::new("open").arg(&url).spawn()?;
+    std::process::Command::new("open").arg(url).spawn()?;
     #[cfg(all(unix, not(target_os = "macos")))]
-    std::process::Command::new("xdg-open").arg(&url).spawn()?;
+    std::process::Command::new("xdg-open").arg(url).spawn()?;
     Ok(())
 }

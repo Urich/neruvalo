@@ -12,7 +12,11 @@ async fn cached(a: &Unlocked) -> Result<Value> {
     )
 }
 fn content(data: &RecordData) -> Value {
-    json!({"record_type":data.record_type,"schema_version":data.schema_version,"title":data.title,"fields":data.fields,"notes":data.notes})
+    let mut value = json!({"record_type":data.record_type,"schema_version":data.schema_version,"title":data.title,"fields":data.fields,"notes":data.notes});
+    if let Some(attachments) = data.extra.get("attachments") {
+        value["attachments"] = attachments.clone();
+    }
+    value
 }
 fn verify_outgoing(a: &Unlocked, item: &Value) -> Result<SharedCopy> {
     let c: SharedCopy = serde_json::from_value(item["copy"].clone())?;
@@ -96,7 +100,7 @@ fn read_copy(a: &Unlocked, c: &SharedCopy) -> Result<RecordData> {
         &c.context(),
     )?;
     let value: Value = serde_json::from_slice(&raw)?;
-    let data = RecordData {
+    let mut data = RecordData {
         record_type: value["record_type"]
             .as_str()
             .ok_or_else(|| anyhow!("INVALID_SHARED_COPY"))?
@@ -109,6 +113,9 @@ fn read_copy(a: &Unlocked, c: &SharedCopy) -> Result<RecordData> {
         tags: vec![],
         extra: BTreeMap::new(),
     };
+    if let Some(attachments) = value.get("attachments") {
+        data.extra.insert("attachments".into(), attachments.clone());
+    }
     ensure!(data.record_type != "group", "INVALID_SHARED_COPY");
     data.validate()?;
     Ok(data)

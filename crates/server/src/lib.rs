@@ -191,13 +191,22 @@ async fn application_with_gate(
         .route("/api/v1/session/close", post(logout))
         .route("/api/v1/snapshot", get(snapshot))
         .route("/api/v2/accounts/{login}", get(sharing::resolve))
-        .route("/api/v2/shares/change", post(sharing::change))
+        .route(
+            "/api/v2/shares/change",
+            post(sharing::change).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route(
             "/api/v1/vault/import",
             post(local_import::import).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
-        .route("/api/v1/records/save", post(save_record))
-        .route("/api/v1/records/batch", post(save_batch))
+        .route(
+            "/api/v1/records/save",
+            post(save_record).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/records/batch",
+            post(save_batch).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route("/api/v1/records/{id}/history", get(history))
         .route("/api/v1/settings", put(settings))
         .route("/api/v1/operations/{id}", get(operation_result))

@@ -1,5 +1,7 @@
 import { catalogs } from "./i18n";
+export type Attachment = { id: string; name: string; size: number; data: string };
 export type Data = {
+  attachments?: Attachment[];
   record_type: string;
   schema_version: number;
   title: string;
@@ -136,6 +138,14 @@ export function errorText(error: unknown): string {
   const s = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, "");
   if (Object.hasOwn(catalogs.en, s)) return s;
   const messages: [RegExp, string][] = [
+    [/KEEPASS_OPEN_FAILED|KEEPASS_INVALID_KEYFILE|KEEPASS_KEY_REQUIRED|KEEPASS_INVALID_FILE/, "keepassOpenFailed"],
+    [/KEEPASS_RESOURCE_LIMIT/, "keepassResourceLimit"],
+    [/KEEPASS_UNSUPPORTED_VERSION/, "keepassUnsupported"],
+    [/KEEPASS_IMPORT_UNCERTAIN/, "keepassUncertain"],
+    [/KEEPASS_IMPORT_PENDING/, "keepassPending"],
+    [/KEEPASS_IMPORT_BLOCKED/, "keepassBlocked"],
+    [/KEEPASS_IMPORT_MISSING|KEEPASS_PROFILE_CHANGED/, "keepassMissing"],
+    [/KEEPASS_FOLDER_REQUIRED/, "keepassFolder"],
     [/incorrect secret or damaged data|INVALID_PASSWORD/i, "incorrectPasswordOrDamagedData"],
     [/master password of at least 12/i, "masterPasswordTooShort"],
     [/INVALID_VAULT_NAME/, "invalidVaultName"],
@@ -151,6 +161,8 @@ export function errorText(error: unknown): string {
     [/VERIFICATION_CANCELLED/, "verificationCancelled"],
     [/VERIFICATION_|Missing verification token|Worker failed/, "verificationFailed"],
     [/ACCESS_DENIED|FORBIDDEN/, "accessDenied"],
+    [/ATTACHMENT_TOO_LARGE|ATTACHMENTS_TOO_LARGE|TOO_MANY_ATTACHMENTS/, "attachmentLimits"],
+    [/INVALID_ATTACHMENT/, "invalidAttachment"],
     [/Record exceeds|Server response too large/, "dataTooLarge"],
   ];
   for (const [pattern, key] of messages) if (pattern.test(s)) return `ui.${key}`;

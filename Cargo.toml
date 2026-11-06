@@ -2,6 +2,7 @@
 members = ["crates/crypto", "crates/protocol", "crates/server", "crates/client-core", "apps/desktop/src-tauri"]
 default-members = ["crates/crypto", "crates/protocol", "crates/server", "crates/client-core"]
 resolver = "2"
+exclude = ["third-party/keepass"]
 
 [workspace.package]
 version = "0.4.0"

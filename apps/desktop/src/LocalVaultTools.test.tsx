@@ -21,7 +21,7 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
 async function mount(status = { unlocked: false } as {unlocked:boolean;local?:boolean;online?:boolean;profile?:string}, selected = "") {
   await act(async () => root.render(<LocalVaultTools status={status} profiles={[{id:"local-1",login:"Personal",server:"",local:true}]}
-    source={selected} onSource={source} onChanged={changed} onConnect={connect} />));
+    importsOnly={!!selected} source={selected} onSource={source} onChanged={changed} onConnect={connect} />));
 }
 async function click(text: string) {
   const button = [...host.querySelectorAll("button")].find((b) => b.textContent === text)!;

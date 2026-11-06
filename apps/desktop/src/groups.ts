@@ -169,3 +169,17 @@ export function archiveSelection(
     unchanged: records.filter((e) => e.archived === archived).length,
   };
 }
+
+/** Membership is independent of the visible search, type and archive filters. */
+export function archiveMembers(id: string, groups: Group[], entries: Entry[]): Set<string> {
+  const ids = new Set([id]);
+  for (let pass = 0; pass <= groups.length; pass++) {
+    const before = ids.size;
+    for (const group of groups)
+      if (group.parent_id && ids.has(group.parent_id)) ids.add(group.id);
+    if (ids.size === before) break;
+  }
+  for (const entry of entries)
+    if (ids.has(parentOf(entry.data, groups) ?? "")) ids.add(entry.record_id);
+  return ids;
+}

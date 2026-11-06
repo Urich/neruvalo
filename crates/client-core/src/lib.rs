@@ -17,8 +17,12 @@ use std::{
 };
 use uuid::Uuid;
 use zeroize::Zeroizing;
+mod attachments;
 mod groups;
+pub use attachments::{Attachment, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_ATTACHMENT_BYTES};
+mod keepass_import;
 mod local;
+pub use keepass_import::{KeepassIssue, KeepassReport};
 mod proxy;
 mod sharing;
 #[cfg(test)]
@@ -64,7 +68,11 @@ impl RecordData {
     pub fn validate(&self) -> Result<()> {
         let group = self.record_type == "group";
         ensure!(
-            self.schema_version == if group { 2 } else { 1 },
+            if group {
+                self.schema_version == 2
+            } else {
+                matches!(self.schema_version, 1 | 2)
+            },
             "UNSUPPORTED_FORMAT"
         );
         ensure!(
@@ -113,8 +121,15 @@ impl RecordData {
                 );
             }
         }
+        attachments::validate(self)?;
         ensure!(
-            serde_json::to_vec(self)?.len() <= 256 * 1024,
+            self.schema_version >= 2 || !self.extra.contains_key("attachments"),
+            "UNSUPPORTED_FORMAT"
+        );
+        let mut metadata = self.clone();
+        metadata.extra.remove("attachments");
+        ensure!(
+            serde_json::to_vec(&metadata)?.len() <= 256 * 1024,
             "Record exceeds 256 KiB"
         );
         Ok(())
@@ -1261,11 +1276,13 @@ fn view(a: &Unlocked, v: &StoredVersion) -> Result<ViewRecord> {
             &v.version_id,
         ),
     )?;
+    let data: RecordData = serde_json::from_slice(&clear)?;
+    data.validate()?;
     Ok(ViewRecord {
         record_id: v.record_id.clone(),
         version_id: v.version_id.clone(),
         revision: v.revision,
         archived: v.archived,
-        data: serde_json::from_slice(&clear)?,
+        data,
     })
 }

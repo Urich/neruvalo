@@ -609,12 +609,15 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
     let mut owner = Client::new(root.join("owner")).unwrap();
     register(&mut owner, &server, "owner", root).await;
     owner.login(&server, "owner", password()).await.unwrap();
+    owner.settings(900).await.unwrap();
     let mut bob = Client::new(root.join("bob")).unwrap();
     register(&mut bob, &server, "bob", root).await;
     bob.login(&server, "bob", password()).await.unwrap();
+    bob.settings(900).await.unwrap();
     let mut carol = Client::new(root.join("carol")).unwrap();
     register(&mut carol, &server, "carol", root).await;
     carol.login(&server, "carol", password()).await.unwrap();
+    carol.settings(900).await.unwrap();
     let group = owner
         .create_group("PRIVATE-GROUP".into(), None)
         .await
@@ -625,6 +628,17 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
     let mut original = data("Mail", "old-secret");
     original.tags = vec!["PRIVATE-TAG".into()];
     original.notes = "shared notes".into();
+    // Exercise a file large enough that its encrypted shared update exceeds the old 2 MiB request limit.
+    let attachment = neruvalo_client::Attachment {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: "certificate.bin".into(),
+        size: 1024 * 1024,
+        data: crypto::b64(vec![0xA5; 1024 * 1024]),
+    };
+    original.schema_version = 2;
+    original
+        .extra
+        .insert("attachments".into(), serde_json::json!([attachment]));
     original
         .extra
         .insert("private-metadata".into(), serde_json::json!("hidden"));
@@ -653,6 +667,14 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
         "old-secret"
     );
     assert_eq!(received["incoming"][0]["data"]["notes"], "shared notes");
+    assert_eq!(
+        received["incoming"][0]["data"]["attachments"][0]["data"],
+        attachment.data
+    );
+    assert_eq!(
+        owner.history(&id).await.unwrap()[0].data.extra["attachments"][0]["name"],
+        "certificate.bin"
+    );
     assert_eq!(
         received["incoming"][0]["data"]["tags"],
         serde_json::json!([])
