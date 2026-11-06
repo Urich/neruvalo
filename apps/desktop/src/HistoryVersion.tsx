@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Attachments } from "./Attachments";
 import { Entry } from "./model";
 import { fieldsOf } from "./documents";
 import { useI18n } from "./i18n";
@@ -6,10 +7,12 @@ export function HistoryVersion({
   entry,
   disabled,
   onRestore,
+  profile,
 }: {
   entry: Entry;
   disabled: boolean;
   onRestore: () => void;
+  profile?: string;
 }) {
   const { t } = useI18n();
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
@@ -43,6 +46,7 @@ export function HistoryVersion({
           </div>
         );
       })}
+      <Attachments items={entry.data.attachments} profile={profile} />
       {entry.data.notes && (
         <div className="field">
           <small>{t("ui.notes")}</small>

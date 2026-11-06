@@ -1105,7 +1105,42 @@ kbd {
 .local-vault-tools > p {flex-basis:100%;margin:0;color:var(--muted);line-height:1.6;}
 .local-vault-dialog {text-align:start;}
 .local-vault-dialog h2 {margin-top:0;}
+.imports-page {max-width:1000px;margin-inline:auto;}
+.import-card {padding:24px 28px;margin-block:20px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
+.import-card h2 {margin-top:0;font-size:20px;}
+.import-card p {line-height:1.6;}
+.import-card label {max-width:520px;}
+.import-card .import-keyfile {display:flex;align-items:center;gap:10px;}
+.import-keyfile input {width:auto;}
+.import-summary dl {display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin-block:20px;}
+.import-summary dl div {padding:12px;background:var(--canvas);border-radius:8px;}
+.import-summary dt {color:var(--muted);font-size:12px;}
+.import-summary dd {margin:6px 0 0;font-size:23px;font-weight:600;}
+.import-actions {display:flex;gap:10px;flex-wrap:wrap;margin-top:20px;}
+@media(max-width:700px) {.import-card {padding:20px;}}
 
 .local-vault-toolbar {margin:0;align-items:center;gap:6px;}
 .vault-toolbar {height:auto;min-height:72px;flex-wrap:wrap;padding-block:12px;}
 .local-vault-toolbar > p {max-width:360px;font-size:12px;}
+
+/* Constrain the desktop workspace to the window; each column owns its scroll. */
+@media (min-width:701px) {
+  .app.vault-screen {height:100dvh;min-height:0;overflow:hidden;}
+  .vault-screen > .sidebar {height:100%;min-height:0;overflow-y:auto;}
+  .vault-screen > main {display:flex;flex-direction:column;height:100%;min-height:0;}
+  .vault-screen > main > header {flex-shrink:0;}
+  .vault-screen > main > .content {display:flex;flex-direction:column;flex:1;min-height:0;width:100%;margin:0 auto;overflow:hidden;}
+  .vault-screen .page-title, .vault-screen .banner {flex-shrink:0;}
+  .vault-screen .vault-grid {flex:1;min-height:0;align-items:stretch;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);}
+  .vault-screen .records-panel {display:flex;flex-direction:column;min-height:0;min-width:0;}
+  .vault-screen .search, .vault-screen .list-caption {flex-shrink:0;}
+  .vault-screen .search input {min-width:0;}
+  .vault-screen .entry-tree {flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;}
+  .vault-screen .records-panel > .empty {min-height:0;overflow:auto;}
+  .vault-screen .detail-panel {min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;}
+}
+@media (max-width:700px) {
+  .vault-screen .records-panel {display:flex;flex-direction:column;min-height:0;max-height:45dvh;}
+  .vault-screen .search, .vault-screen .list-caption {flex-shrink:0;}
+  .vault-screen .entry-tree {min-height:0;overflow:auto;overscroll-behavior:contain;}
+}

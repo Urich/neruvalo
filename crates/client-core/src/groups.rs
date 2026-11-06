@@ -81,7 +81,11 @@ impl Client {
         Ok(())
     }
     // A group is an encrypted metadata object, not a user-visible ninth secret type.
-    fn group_data(title: String, parent: Option<String>, legacy: Option<String>) -> RecordData {
+    pub(super) fn group_data(
+        title: String,
+        parent: Option<String>,
+        legacy: Option<String>,
+    ) -> RecordData {
         let mut extra = BTreeMap::from([("parent_group_id".into(), json!(parent))]);
         if let Some(path) = legacy {
             extra.insert("legacy_path".into(), json!(path));

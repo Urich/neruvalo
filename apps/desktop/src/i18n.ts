@@ -1,5 +1,8 @@
 import feedbackMessages from "../../../crates/server/src/verification/messages.json";
 import { localVaultMessages } from "./localVaultMessages";
+import { attachmentMessages } from "./attachmentMessages";
+import { keepassMessages } from "./keepassMessages";
+import { importMessages } from "./importMessages";
 import { useSyncExternalStore } from "react";
 import en from "./locales/en.json";
 import ru from "./locales/ru.json";
@@ -43,6 +46,9 @@ for (const [language, values] of Object.entries(feedbackMessages.translations)) 
   feedbackMessages.keys.forEach((key, index) => { catalogs[language][`ui.${key}`] = values[index]; });
 }
 for (const [language, messages] of Object.entries(localVaultMessages)) Object.assign(catalogs[language], messages);
+for (const [language, messages] of Object.entries(attachmentMessages)) Object.assign(catalogs[language], messages);
+for (const [language, messages] of Object.entries(keepassMessages)) Object.assign(catalogs[language], messages);
+for (const [language, messages] of Object.entries(importMessages)) Object.assign(catalogs[language], messages);
 export function resolveLocale(locale: string): string {
   const normalized = locale.replaceAll("_", "-").toLowerCase();
   const [base] = normalized.split("-");
