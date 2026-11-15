@@ -959,7 +959,8 @@ it("creates and edits a local vault without requesting a server or bot check", a
     const request = args[1].request;
     if (request.action === "lock") { local = false; native.unlocked = false; return Promise.resolve(null); }
     if (request.action === "prepare_verification") return Promise.resolve({enabled:true,secret:"a".repeat(43),url:"https://a.example/verification#proof"});
-    if (request.action === "create_local") { local = true; created = true; native.unlocked = true; return Promise.resolve({local:true}); }
+    if (request.action === "local_file_info") return Promise.resolve({path:`/vaults/${request.path}`,exists:false});
+    if (request.action === "create_local_file") { local = true; created = true; native.unlocked = true; return Promise.resolve({local:true}); }
     if (request.action === "status" && local) return Promise.resolve({unlocked:true,local:true,online:false,profile:"local-1",login:"Personal",server:"",timeout_seconds:300});
     if (request.action === "profiles" && created) return Promise.resolve([{id:"local-1",login:"Personal",server:"",local:true}]);
     return original(...args);

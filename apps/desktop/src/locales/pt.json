@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "O formato da base de dados ou dos dados deste cofre não é suportado. O cofre não foi aberto. Use uma versão compatível da aplicação ou abra outro cofre."
+  "ui.unsupportedVaultFormat": "O formato da base de dados ou dos dados deste cofre não é suportado. O cofre não foi aberto. Use uma versão compatível da aplicação ou abra outro cofre.",
+  "ui.openLocalVault": "Abrir cofre local",
+  "ui.openLocalVaultHelp": "Escolha cache.sqlite3 ou profile.json. Ambos os ficheiros devem estar na mesma pasta. Introduza a palavra-passe mestra deste cofre.",
+  "ui.localVaultFile": "Ficheiro do cofre",
+  "ui.localVaultFilesMissing": "A base de dados ou profile.json não foi encontrado. Coloque ambos na mesma pasta e selecione novamente o cofre.",
+  "ui.invalidLocalVaultFile": "Este ficheiro não é um cofre local Neruvalo.",
+  "ui.localFileFormHelp": "Introduza um novo nome ou escolha um cofre existente. Os novos cofres são guardados num único ficheiro cifrado .nvdb.",
+  "ui.localFileNew": "Será criado um novo cofre aqui.",
+  "ui.localFileExists": "O ficheiro existe. Introduza a sua palavra-passe mestra para o abrir.",
+  "ui.localChooseFile": "Escolher ficheiro…",
+  "ui.localFilenameRequired": "Introduza um nome de ficheiro ou caminho completo.",
+  "ui.localFilenameChecking": "A verificar o ficheiro…",
+  "ui.localInvalidFilePath": "Verifique o nome e escolha uma pasta existente.",
+  "ui.localFileAlreadyExists": "O ficheiro já existe. Abra-o ou escolha outro nome.",
+  "ui.localNewFile": "Novo ficheiro…"
 }

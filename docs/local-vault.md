@@ -1,7 +1,7 @@
 # Local vaults
 
 The start screen offers **Create local vault** and **Restore from backup**.
-A local vault needs a name and a master password of at least twelve characters.
+A new local vault needs a filename and a master password of at least twelve characters.
 It does not register an account, send email, or contact GateVeriq. Saved local
 profiles appear alongside cached server profiles in the profile selector.
 
@@ -9,6 +9,56 @@ Local vaults support records, encrypted groups, nested folders, version history,
 subtree archive/restore, clipboard controls, and a locally stored lock timeout.
 They remain writable without a network. Server profiles unlocked offline remain
 read-only. Sharing and synchronization require a server profile.
+
+## Choosing a local vault file
+
+The local vault form starts with an editable filename/path field. Enter a filename
+such as `personal.nvdb` to use the app's `vaults` directory, or enter an absolute
+path. **New file…** uses a save-path dialog accepting a filename that does not exist yet;
+**Choose file…** uses an open-file dialog for an existing vault without an overwrite
+prompt. You can also type a new filename directly in the editable field. The dialogs
+only choose a path; creation/opening happens after password entry in the form. The
+form has one primary action, **Open** or **Create local vault**, according to file
+existence. The resolved destination is shown below the
+field. Relative paths are resolved by the native core, and invalid names or missing
+explicit destination directories disable submission with an explanation.
+
+The app checks whether the file exists. A missing file uses **Create local vault**,
+a master password of at least twelve characters and confirmation. An existing
+file uses **Open** and only that file's master password. Out-of-order results from
+older path checks cannot change the mode for the current path. A create operation
+uses exclusive file creation, so a file appearing after inspection is never
+overwritten; the form refreshes its state and asks for an explicit open instead.
+A disappearing file is never replaced by an empty database during opening.
+
+New vaults are self-contained SQLite files (recommended extension `.nvdb`). The
+existing wrapped-key profile is stored under `meta.local_profile`; passwords and
+private keys are not stored in plaintext. The vault title is derived from the
+filename. Record/file encryption, signed history and schema version 2 are unchanged.
+The older `cache.sqlite3` plus neighboring `profile.json` format is still accepted.
+For that older format both original files must remain together; select either.
+`.nvbackup` files continue to use **Restore from backup**.
+
+Opening validates the profile/key identities, SQLite header and schema, record
+payload formats and current metadata. It opens the selected database in place
+using SQLite `mode=rw`, never create-if-missing. Incorrect passwords, missing
+files and incompatible formats cannot register an empty replacement database.
+Incompatible formats return to Unlock vault using the existing error handling.
+Normal offline unlock likewise requires an existing database file.
+
+After successful validation, an external vault is remembered as a local profile.
+Its managed profile folder contains an encrypted key-profile copy and a
+`local-location.json` pointer to the original database, bound to its account ID
+and public signing key. No database is copied into that folder. Reopening the
+same canonical path reuses the remembered profile. Local auto-lock settings remain
+specific to that remembered profile. Every unlock rereads the authoritative key
+profile from the selected database (or the legacy sidecar), so remembered metadata
+does not bypass an updated master-password envelope. A moved or disconnected vault
+is not recreated automatically.
+
+Changes, history and imported files are written to the selected database. Backups
+and server transfer work as before. Close applications using a vault before moving
+or copying it, so SQLite can finish/checkpoint any transient journal files.
 
 ## Storage and backups
 

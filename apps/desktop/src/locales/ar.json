@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "تنسيق قاعدة البيانات أو بيانات هذه الخزنة غير مدعوم. لم تُفتح الخزنة. استخدم إصدارًا متوافقًا من التطبيق أو افتح خزنة أخرى."
+  "ui.unsupportedVaultFormat": "تنسيق قاعدة البيانات أو بيانات هذه الخزنة غير مدعوم. لم تُفتح الخزنة. استخدم إصدارًا متوافقًا من التطبيق أو افتح خزنة أخرى.",
+  "ui.openLocalVault": "فتح خزنة محلية",
+  "ui.openLocalVaultHelp": "اختر cache.sqlite3 أو profile.json. يجب أن يكون الملفان في المجلد نفسه. أدخل كلمة المرور الرئيسية لهذه الخزنة.",
+  "ui.localVaultFile": "ملف الخزنة",
+  "ui.localVaultFilesMissing": "قاعدة بيانات الخزنة أو profile.json غير موجود. ضع الملفين في المجلد نفسه واختر الخزنة مجددًا.",
+  "ui.invalidLocalVaultFile": "هذا الملف ليس خزنة Neruvalo محلية.",
+  "ui.localFileFormHelp": "أدخل اسم ملف جديدًا أو اختر خزنة موجودة. تُحفظ الخزن الجديدة في ملف .nvdb واحد مشفر.",
+  "ui.localFileNew": "ستُنشأ خزنة جديدة هنا.",
+  "ui.localFileExists": "الملف موجود. أدخل كلمة المرور الرئيسية لفتحه.",
+  "ui.localChooseFile": "اختيار ملف…",
+  "ui.localFilenameRequired": "أدخل اسم الملف أو المسار الكامل.",
+  "ui.localFilenameChecking": "جارٍ فحص الملف…",
+  "ui.localInvalidFilePath": "تحقق من الاسم واختر مجلدًا موجودًا.",
+  "ui.localFileAlreadyExists": "الملف موجود بالفعل. افتحه أو اختر اسمًا آخر.",
+  "ui.localNewFile": "ملف جديد…"
 }

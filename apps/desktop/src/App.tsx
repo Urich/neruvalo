@@ -1284,13 +1284,9 @@ export default function App() {
                       ? t("ui.createAccount")
                       : t("ui.unlockVault")}
                 </h2>
-                <p className="muted">
-                  {mode === "verify"
-                    ? t(
-                        "ui.inThisPrototypeEmailIsSavedInTheServerSPrivateDevOutbox",
-                      )
-                    : t("ui.yourPasswordStaysOnYourDevice")}
-                </p>
+                {mode === "verify" && <p className="muted">
+                  {t("ui.inThisPrototypeEmailIsSavedInTheServerSPrivateDevOutbox")}
+                </p>}
                 {mode === "verify" ? (
                   <>
                     <label>

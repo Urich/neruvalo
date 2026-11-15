@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "Le format de la base de données ou des données de ce coffre n’est pas pris en charge. Le coffre n’a pas été ouvert. Utilisez une version compatible de l’application ou ouvrez un autre coffre."
+  "ui.unsupportedVaultFormat": "Le format de la base de données ou des données de ce coffre n’est pas pris en charge. Le coffre n’a pas été ouvert. Utilisez une version compatible de l’application ou ouvrez un autre coffre.",
+  "ui.openLocalVault": "Ouvrir un coffre local",
+  "ui.openLocalVaultHelp": "Choisissez cache.sqlite3 ou profile.json. Les deux fichiers doivent être dans le même dossier. Saisissez le mot de passe maître de ce coffre.",
+  "ui.localVaultFile": "Fichier du coffre",
+  "ui.localVaultFilesMissing": "La base du coffre ou profile.json est introuvable. Placez les deux fichiers dans le même dossier et sélectionnez à nouveau le coffre.",
+  "ui.invalidLocalVaultFile": "Ce fichier n’est pas un coffre local Neruvalo.",
+  "ui.localFileFormHelp": "Saisissez un nouveau nom ou choisissez un coffre existant. Les nouveaux coffres sont enregistrés dans un seul fichier chiffré .nvdb.",
+  "ui.localFileNew": "Un nouveau coffre sera créé ici.",
+  "ui.localFileExists": "Ce fichier existe. Saisissez son mot de passe maître pour l’ouvrir.",
+  "ui.localChooseFile": "Choisir un fichier…",
+  "ui.localFilenameRequired": "Saisissez un nom de fichier ou un chemin complet.",
+  "ui.localFilenameChecking": "Vérification du fichier…",
+  "ui.localInvalidFilePath": "Vérifiez le nom du fichier et choisissez un dossier existant.",
+  "ui.localFileAlreadyExists": "Ce fichier existe déjà. Ouvrez-le ou choisissez un autre nom.",
+  "ui.localNewFile": "Nouveau fichier…"
 }

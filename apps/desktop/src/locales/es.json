@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "El formato de la base de datos o de los datos de esta bóveda no es compatible. No se ha abierto la bóveda. Use una versión compatible de la aplicación o abra otra bóveda."
+  "ui.unsupportedVaultFormat": "El formato de la base de datos o de los datos de esta bóveda no es compatible. No se ha abierto la bóveda. Use una versión compatible de la aplicación o abra otra bóveda.",
+  "ui.openLocalVault": "Abrir bóveda local",
+  "ui.openLocalVaultHelp": "Seleccione cache.sqlite3 o profile.json. Ambos archivos deben estar en la misma carpeta. Introduzca la contraseña maestra de esta bóveda.",
+  "ui.localVaultFile": "Archivo de la bóveda",
+  "ui.localVaultFilesMissing": "Falta la base de datos o profile.json. Coloque ambos archivos en la misma carpeta y seleccione la bóveda de nuevo.",
+  "ui.invalidLocalVaultFile": "Este archivo no es una bóveda local de Neruvalo.",
+  "ui.localFileFormHelp": "Introduzca un nombre nuevo o elija una bóveda existente. Las nuevas bóvedas se guardan en un archivo cifrado .nvdb.",
+  "ui.localFileNew": "Aquí se creará una nueva bóveda.",
+  "ui.localFileExists": "El archivo existe. Introduzca su contraseña maestra para abrirlo.",
+  "ui.localChooseFile": "Elegir archivo…",
+  "ui.localFilenameRequired": "Introduzca un nombre de archivo o una ruta completa.",
+  "ui.localFilenameChecking": "Comprobando el archivo…",
+  "ui.localInvalidFilePath": "Revise el nombre y elija una carpeta existente.",
+  "ui.localFileAlreadyExists": "El archivo ya existe. Ábralo o elija otro nombre.",
+  "ui.localNewFile": "Nuevo archivo…"
 }

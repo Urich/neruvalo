@@ -1250,3 +1250,9 @@ input[type="date"], input[type="month"] { padding-block: 0; line-height: normal;
 .date-month-grid > .subtle { min-height: 38px; padding: 6px; color: var(--text); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .calendar-year-label input::-webkit-inner-spin-button, .calendar-year-label input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+.local-file-summary { margin: 10px 0 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.local-file-summary p { margin: 0 0 5px; }
+.local-file-summary small { display: block; overflow-wrap: anywhere; color: var(--muted); }
+
+.local-file-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 12px; }

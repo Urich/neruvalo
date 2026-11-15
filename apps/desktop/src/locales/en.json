@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "This vault uses an unsupported database or data format and cannot be opened. Use a compatible app version or open another vault."
+  "ui.unsupportedVaultFormat": "This vault uses an unsupported database or data format and cannot be opened. Use a compatible app version or open another vault.",
+  "ui.openLocalVault": "Open local vault",
+  "ui.openLocalVaultHelp": "Choose cache.sqlite3 or profile.json. Both files must be in the same folder. Enter the master password of this vault.",
+  "ui.localVaultFile": "Vault file",
+  "ui.localVaultFilesMissing": "The vault database or profile.json is missing. Keep both files together and select the vault again.",
+  "ui.invalidLocalVaultFile": "This file is not a local Neruvalo vault.",
+  "ui.localFileFormHelp": "Enter a new filename or choose an existing vault. New vaults are saved as one encrypted .nvdb file.",
+  "ui.localFileNew": "A new vault will be created here.",
+  "ui.localFileExists": "This file exists. Enter its master password to open it.",
+  "ui.localChooseFile": "Choose file…",
+  "ui.localFilenameRequired": "Enter a filename or a full path.",
+  "ui.localFilenameChecking": "Checking the file…",
+  "ui.localInvalidFilePath": "Check the filename and choose an existing folder.",
+  "ui.localFileAlreadyExists": "This file already exists. Open it or choose another filename.",
+  "ui.localNewFile": "New file…"
 }

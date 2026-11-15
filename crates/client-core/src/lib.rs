@@ -24,6 +24,7 @@ pub mod totp;
 pub use attachments::{Attachment, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_ATTACHMENT_BYTES};
 mod keepass_import;
 mod local;
+mod local_open;
 pub use keepass_import::{KeepassIssue, KeepassReport};
 mod proxy;
 mod sharing;
@@ -859,33 +860,8 @@ impl Client {
         );
         let p: Profile =
             serde_json::from_slice(&std::fs::read(self.dir.join(id).join("profile.json"))?)?;
-        let local = crypto::password_key(&password, &unb64(&p.local_salt)?)?;
-        let root = crypto::parse_key(&crypto::open(
-            local.as_ref(),
-            &p.local_root,
-            &local_context(&p.server_id, &p.account_id),
-        )?)?;
-        let raw = crypto::open(
-            root.as_ref(),
-            &serde_json::from_value(p.bundle.envelope["keys"].clone())?,
-            &keys_context(&p.server_id, &p.account_id),
-        )?;
-        let keys: AccountKeys = serde_json::from_slice(&raw)?;
-        let db = cache(&self.dir, id).await?;
-        let mut unlocked = Unlocked {
-            profile: p,
-            keys,
-            _root: root,
-            token: Zeroizing::new(String::new()),
-            last_activity: Instant::now(),
-            cache: db,
-            online: false,
-            needs_sync: false,
-            index_cache: BTreeMap::new(),
-            attachment_handles: attachments::Handles::default(),
-        };
-        // Publish the candidate only after compatibility checks, so failure stays locked.
-        validate_cached_vault(&mut unlocked).await?;
+        let (profile, database) = local_open::profile_for_unlock(&self.dir, id, p).await?;
+        let unlocked = local_open::unlock_candidate(profile, &database, password).await?;
         self.active = Some(unlocked);
         Ok(self.status())
     }

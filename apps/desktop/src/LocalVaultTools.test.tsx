@@ -14,7 +14,9 @@ Object.defineProperties(HTMLDialogElement.prototype, {
 let root: Root, host: HTMLDivElement;
 const changed = vi.fn(), source = vi.fn(), connect = vi.fn();
 beforeEach(() => {
-  setPreference("en"); native.invoke.mockReset().mockResolvedValue({ local: true });
+  setPreference("en"); native.invoke.mockReset().mockImplementation(async (_,{request}) => request.action === "local_file_info"
+    ? {path:request.path.startsWith("/") ? request.path : `/vaults/${request.path}`,exists:request.path.startsWith("/existing")}
+    : {local:true});
   changed.mockReset().mockResolvedValue(null); source.mockReset(); connect.mockReset().mockResolvedValue(null);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
@@ -40,10 +42,8 @@ it("creates a local vault with matching passwords without server verification", 
   expect(host.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(true);
   await fill(inputs[2], "local-password-123");
   await act(async () => host.querySelector<HTMLButtonElement>('[type="submit"]')!.click());
-  expect(native.invoke).toHaveBeenCalledTimes(1);
-  expect(native.invoke).toHaveBeenCalledWith("command", {request: {
-    action:"create_local",expected_profile:undefined,name:"Personal",password:"local-password-123",source_id:"",
-  }});
+  const create=native.invoke.mock.calls.find(([,args])=>args.request.action === "create_local_file");
+  expect(create?.[1].request).toMatchObject({path:"Personal",password:"local-password-123",confirmation:"local-password-123"});
   expect(changed).toHaveBeenCalledOnce(); expect(host.querySelector("iframe")).toBeNull();
 });
 it("exposes backups and connection for a local profile", async () => {
@@ -108,4 +108,151 @@ it("closes restoration when the app rejects an incompatible vault format", async
   expect(reject).toHaveBeenCalledWith(error);
   expect(host.querySelector("dialog")).toBeNull();
   expect(changed).not.toHaveBeenCalled();
+});
+
+it("opens an existing file from the creation form using its password", async () => {
+  await mount(); await click("Create local vault");
+  const chosen={id:"choice-1",name:"cache.sqlite3",path:"/existing/vault/cache.sqlite3"};
+  native.invoke.mockResolvedValueOnce(chosen.path);
+  await click("Choose file…");
+  expect(native.invoke.mock.calls[0][1].request.action).toBe("local_pick_target");
+  expect(host.querySelector("dialog h2")?.textContent).toBe("Local vault");
+  expect(host.querySelector<HTMLInputElement>('dialog input[placeholder="vault.nvdb"]')!.value).toBe(chosen.path);
+  expect(host.querySelectorAll('dialog input[type="password"]')).toHaveLength(1);
+  expect(host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.disabled).toBe(true);
+  await fill(host.querySelector<HTMLInputElement>('dialog input[type="password"]')!,"existing-password");
+  await act(async()=>host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.click());
+  expect(native.invoke.mock.calls.find(([,args])=>args.request.action === "open_local_path")?.[1].request).toMatchObject({path:chosen.path,password:"existing-password"});
+  expect(native.invoke.mock.calls.some(([,args])=>args.request.action==="create_local")).toBe(false);
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it("keeps the creation form intact when file selection is cancelled", async () => {
+  await mount();await click("Create local vault");
+  await fill(host.querySelector<HTMLInputElement>("dialog input")!,"My draft");
+  native.invoke.mockResolvedValueOnce(null);
+  await click("Choose file…");
+  expect(host.querySelector("dialog h2")?.textContent).toBe("Local vault");
+  expect(host.querySelector<HTMLInputElement>("dialog input")!.value).toBe("My draft");
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it("keeps an existing selection retryable after a wrong password", async () => {
+  await mount();await click("Create local vault");
+  native.invoke.mockResolvedValueOnce("/existing/profile.json");
+  await click("Choose file…");
+  await fill(host.querySelector<HTMLInputElement>('dialog input[type="password"]')!,"wrong-password");
+  native.invoke.mockRejectedValueOnce(new Error("incorrect secret or damaged data"));
+  await act(async()=>host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.click());
+  expect(host.querySelector("dialog")?.open).toBe(true);
+  expect(host.querySelector('[role="alert"]')!.textContent).toBe(translate("ui.incorrectPasswordOrDamagedData"));
+  await fill(host.querySelector<HTMLInputElement>('dialog input[type="password"]')!,"correct-password");
+  await act(async()=>host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.click());
+  expect(native.invoke.mock.calls.at(-1)![1].request.path).toBe("/existing/profile.json");
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it("switches between opening and creating after choosing a filename",async()=>{
+  await mount();await click("Create local vault");
+  const input=host.querySelector<HTMLInputElement>('dialog input[placeholder="vault.nvdb"]')!;
+  await fill(input,"/existing/personal.nvdb");
+  expect(host.textContent).toContain("This file exists");
+  expect(host.querySelectorAll('dialog input[type="password"]')).toHaveLength(1);
+  await fill(input,"personal.nvdb");
+  native.invoke.mockResolvedValueOnce("/chosen/personal.nvdb");
+  await click("Choose file…");
+  expect(input.value).toBe("/chosen/personal.nvdb");
+  expect(host.textContent).toContain("A new vault will be created here");
+  expect(host.querySelectorAll('dialog input[type="password"]')).toHaveLength(2);
+});
+
+it("ignores an older filename check that resolves after the path changes",async()=>{
+  const original=native.invoke.getMockImplementation()!;
+  let finish: (value:unknown)=>void = ()=>{};
+  native.invoke.mockImplementation((...args)=>args[1].request.action==="local_file_info" && args[1].request.path==="old.nvdb"
+    ? new Promise(resolve=>{finish=resolve;}) : original(...args));
+  await mount();await click("Create local vault");
+  const input=host.querySelector<HTMLInputElement>('dialog input[placeholder="vault.nvdb"]')!;
+  await fill(input,"old.nvdb");
+  expect(host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.disabled).toBe(true);
+  await fill(input,"new.nvdb");
+  await act(async()=>finish({path:"/old.nvdb",exists:true}));
+  expect(host.textContent).toContain("/vaults/new.nvdb");
+  expect(host.textContent).not.toContain("This file exists");
+  expect(host.querySelectorAll('dialog input[type="password"]')).toHaveLength(2);
+});
+
+
+it("does not overwrite or automatically open a file that appeared after checking",async()=>{
+  const original=native.invoke.getMockImplementation()!;
+  let appeared=false;
+  native.invoke.mockImplementation((...args)=>{
+    const r=args[1].request;
+    if(r.action==="create_local_file") {appeared=true;return Promise.reject(new Error("LOCAL_VAULT_FILE_EXISTS"));}
+    if(r.action==="local_file_info") return Promise.resolve({path:"/vaults/race.nvdb",exists:appeared});
+    return original(...args);
+  });
+  await mount();await click("Create local vault");
+  await fill(host.querySelector<HTMLInputElement>('dialog input[placeholder="vault.nvdb"]')!,"race.nvdb");
+  const passwords=host.querySelectorAll<HTMLInputElement>('dialog input[type="password"]');
+  await fill(passwords[0],"creation-password");await fill(passwords[1],"creation-password");
+  await act(async()=>host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.click());
+  expect(host.textContent).toContain("This file already exists");
+  expect(host.querySelectorAll('dialog input[type="password"]')).toHaveLength(1);
+  expect(host.querySelector<HTMLInputElement>('dialog input[type="password"]')!.value).toBe("");
+  expect(native.invoke.mock.calls.some(([,args])=>args.request.action==="open_local_path")).toBe(false);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+
+it("offers to open an existing file selected next to the filename without creating it",async()=>{
+  await mount();await click("Create local vault");
+  native.invoke.mockResolvedValueOnce("/existing/work.nvdb");
+  await click("Choose file…");
+  expect(native.invoke.mock.calls[0][1].request.action).toBe("local_pick_target");
+  expect(host.querySelector<HTMLInputElement>('dialog input[placeholder="vault.nvdb"]')!.value).toBe("/existing/work.nvdb");
+  expect(host.textContent).toContain("This file exists");
+  expect(host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.textContent).toBe("Open");
+  expect([...host.querySelectorAll("dialog button")].filter(button=>button.textContent?.trim() === "Open")).toHaveLength(1);
+  expect(host.textContent).not.toContain("Open…");
+  expect(host.querySelectorAll('dialog input[type="password"]')).toHaveLength(1);
+  expect(changed).not.toHaveBeenCalled();
+  expect(native.invoke.mock.calls.some(([,args])=>["create_local_file","open_local_path"].includes(args.request.action))).toBe(false);
+});
+
+it("keeps the typed filename when choosing a file is cancelled",async()=>{
+  await mount();await click("Create local vault");
+  const input=host.querySelector<HTMLInputElement>('dialog input[placeholder="vault.nvdb"]')!;
+  await fill(input,"draft.nvdb");
+  native.invoke.mockResolvedValueOnce(null);
+  await click("Choose file…");
+  expect(input.value).toBe("draft.nvdb");
+  expect(host.textContent).toContain("A new vault will be created here");
+});
+
+it("chooses a not-yet-existing filename through New file and creates only after password confirmation",async()=>{
+  await mount();await click("Create local vault");
+  native.invoke.mockResolvedValueOnce("/chosen/new-vault.nvdb");
+  await click("New file…");
+  expect(native.invoke.mock.calls[0][1].request).toMatchObject({action:"local_pick_target",mode:"new"});
+  expect(host.querySelector<HTMLInputElement>('dialog input[placeholder="vault.nvdb"]')!.value).toBe("/chosen/new-vault.nvdb");
+  expect(host.textContent).toContain("A new vault will be created here");
+  expect(host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.disabled).toBe(true);
+  expect(changed).not.toHaveBeenCalled();
+  const passwords=host.querySelectorAll<HTMLInputElement>('dialog input[type="password"]');
+  await fill(passwords[0],"new-file-password");await fill(passwords[1],"new-file-password");
+  await act(async()=>host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.click());
+  expect(native.invoke.mock.calls.at(-1)![1].request).toMatchObject({action:"create_local_file",path:"/chosen/new-vault.nvdb"});
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it("keeps the path after cancelling New file and uses open mode for existing vaults",async()=>{
+  await mount();await click("Create local vault");
+  const input=host.querySelector<HTMLInputElement>('dialog input[placeholder="vault.nvdb"]')!;
+  await fill(input,"draft.nvdb");
+  native.invoke.mockResolvedValueOnce(null);await click("New file…");
+  expect(input.value).toBe("draft.nvdb");
+  native.invoke.mockResolvedValueOnce("/existing/work.nvdb");await click("Choose file…");
+  expect(native.invoke.mock.calls.filter(([,args])=>args.request.action==="local_pick_target").at(-1)?.[1].request.mode).toBe("existing");
+  expect(host.querySelector<HTMLButtonElement>('dialog [type="submit"]')!.textContent).toBe("Open");
 });

@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "Das Datenbank- oder Datenformat dieses Tresors wird nicht unterstützt. Der Tresor wurde nicht geöffnet. Verwenden Sie eine kompatible App-Version oder öffnen Sie einen anderen Tresor."
+  "ui.unsupportedVaultFormat": "Das Datenbank- oder Datenformat dieses Tresors wird nicht unterstützt. Der Tresor wurde nicht geöffnet. Verwenden Sie eine kompatible App-Version oder öffnen Sie einen anderen Tresor.",
+  "ui.openLocalVault": "Lokalen Tresor öffnen",
+  "ui.openLocalVaultHelp": "Wählen Sie cache.sqlite3 oder profile.json. Beide Dateien müssen im selben Ordner liegen. Geben Sie das Masterpasswort dieses Tresors ein.",
+  "ui.localVaultFile": "Tresordatei",
+  "ui.localVaultFilesMissing": "Die Tresordatenbank oder profile.json fehlt. Legen Sie beide Dateien in denselben Ordner und wählen Sie den Tresor erneut aus.",
+  "ui.invalidLocalVaultFile": "Diese Datei ist kein lokaler Neruvalo-Tresor.",
+  "ui.localFileFormHelp": "Geben Sie einen neuen Dateinamen ein oder wählen Sie einen vorhandenen Tresor. Neue Tresore werden als eine verschlüsselte .nvdb-Datei gespeichert.",
+  "ui.localFileNew": "Hier wird ein neuer Tresor erstellt.",
+  "ui.localFileExists": "Diese Datei existiert. Geben Sie zum Öffnen ihr Masterpasswort ein.",
+  "ui.localChooseFile": "Datei wählen…",
+  "ui.localFilenameRequired": "Geben Sie einen Dateinamen oder vollständigen Pfad ein.",
+  "ui.localFilenameChecking": "Datei wird geprüft…",
+  "ui.localInvalidFilePath": "Prüfen Sie den Dateinamen und wählen Sie einen vorhandenen Ordner.",
+  "ui.localFileAlreadyExists": "Die Datei existiert bereits. Öffnen Sie sie oder wählen Sie einen anderen Namen.",
+  "ui.localNewFile": "Neue Datei…"
 }

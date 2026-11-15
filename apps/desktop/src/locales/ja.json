@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "この保管庫のデータベースまたはデータ形式はサポートされていないため、開けません。互換性のあるアプリのバージョンを使用するか、別の保管庫を開いてください。"
+  "ui.unsupportedVaultFormat": "この保管庫のデータベースまたはデータ形式はサポートされていないため、開けません。互換性のあるアプリのバージョンを使用するか、別の保管庫を開いてください。",
+  "ui.openLocalVault": "ローカル保管庫を開く",
+  "ui.openLocalVaultHelp": "cache.sqlite3 または profile.json を選択してください。両方のファイルを同じフォルダーに置き、この保管庫のマスターパスワードを入力してください。",
+  "ui.localVaultFile": "保管庫ファイル",
+  "ui.localVaultFilesMissing": "保管庫のデータベースまたは profile.json が見つかりません。両方を同じフォルダーに置いて再選択してください。",
+  "ui.invalidLocalVaultFile": "このファイルは Neruvalo のローカル保管庫ではありません。",
+  "ui.localFileFormHelp": "新しいファイル名を入力するか、既存の保管庫を選択してください。新しい保管庫は単一の暗号化された .nvdb ファイルに保存されます。",
+  "ui.localFileNew": "ここに新しい保管庫を作成します。",
+  "ui.localFileExists": "このファイルは存在します。マスターパスワードを入力して開いてください。",
+  "ui.localChooseFile": "ファイルを選択…",
+  "ui.localFilenameRequired": "ファイル名またはフルパスを入力してください。",
+  "ui.localFilenameChecking": "ファイルを確認中…",
+  "ui.localInvalidFilePath": "ファイル名を確認し、既存のフォルダーを選択してください。",
+  "ui.localFileAlreadyExists": "ファイルは既に存在します。開くか、別の名前を選択してください。",
+  "ui.localNewFile": "新規ファイル…"
 }

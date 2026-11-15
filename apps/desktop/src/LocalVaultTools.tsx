@@ -17,7 +17,13 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
 }) {
   const { t } = useI18n();
   const [action, setAction] = useState<Action | null>(null);
-  const [name, setName] = useState("");
+  const [filePath, setFilePath] = useState("");
+  const [fileInfo, setFileInfo] = useState<{path: string; exists: boolean} | null>(null);
+  const [fileChecking, setFileChecking] = useState(false);
+  const [fileError, setFileError] = useState("");
+  const [fileRevision, setFileRevision] = useState(0);
+  const vaultForm = action === "create_local";
+  const existing = !!fileInfo?.exists;
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
@@ -29,7 +35,7 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
     connect: "ui.connectLocalVault", create_local: "ui.createLocalVault", restore_local_backup: "ui.restoreLocalBackup",
     export_local_backup: "ui.exportLocalBackup", import_local: "ui.importLocalVault",
   };
-  function open(next: Action) { setError(""); setNotice(""); setPassword(""); setConfirmation(""); setAction(next); }
+  function open(next: Action) { setFilePath(""); setFileInfo(null); setFileError(""); setError(""); setNotice(""); setPassword(""); setConfirmation(""); setAction(next); }
   function close() { if (!busy) { if (action === "import_local") onSource(""); setAction(null); setPassword(""); setConfirmation(""); } }
   useEffect(() => {
     if (importsOnly && source && status.unlocked && status.online && !status.local) open("import_local");
@@ -41,8 +47,33 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
     modal.showModal();
     return () => { modal.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, [action]);
+  useEffect(() => {
+    if (!vaultForm || !filePath.trim()) { setFileInfo(null); setFileChecking(false); setFileError(""); return; }
+    let current = true;
+    setFileInfo(null); setFileChecking(true); setFileError("");
+    // Discard results for older paths; they must never enable Create/Open for a newer filename.
+    invoke<{path: string; exists: boolean}>("command", {request: {action:"local_file_info",path:filePath}})
+      .then(info => { if (current) setFileInfo(info); })
+      .catch(error => { if (current) setFileError(errorText(error)); })
+      .finally(() => { if (current) setFileChecking(false); });
+    return () => { current = false; };
+  }, [vaultForm, filePath, fileRevision]);
+  async function pickTarget(mode: "new" | "existing" = "existing") {
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      const selected = await invoke<string | null>("command", {request: {
+        action:"local_pick_target",expected_profile:status.profile,path:filePath,mode,title:t(mode === "new" ? "ui.localNewFile" : "ui.localChooseFile"),
+      }});
+      if (!selected) return;
+      // Choosing a path is separate from creating/opening it; the existence
+      // check below determines which action the user can explicitly confirm.
+      setFilePath(selected);setFileRevision(value => value + 1);setPassword("");setConfirmation("");
+    } catch (error) { setError(errorText(error)); }
+    finally { setBusy(false); }
+  }
   async function submit() {
-    if (!action || busy) return;
+    if (!action || busy || (vaultForm && (!fileInfo || fileChecking || !password || (!existing && (password.length < 12 || password !== confirmation))))) return;
     setBusy(true); setError("");
     try {
       if (action === "connect") {
@@ -51,7 +82,9 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
         return;
       }
       const result = await invoke("command", { request: {
-        action, expected_profile: status.profile, name, password, source_id: source,
+        action: vaultForm ? existing ? "open_local_path" : "create_local_file" : action,
+        expected_profile: status.profile, password, source_id: source,
+        ...(vaultForm ? {path:filePath, ...(existing ? {} : {confirmation})} : {}),
       }});
       if (result === null || result === false) return;
       await onChanged();
@@ -63,11 +96,18 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
         setAction(null); setPassword(""); setConfirmation("");
         return;
       }
+      if (vaultForm && /LOCAL_VAULT_FILE_EXISTS|LOCAL_VAULT_FILES_MISSING/.test(String(e))) {
+        setPassword(""); setConfirmation(""); setFileRevision(value => value + 1);
+      }
       setError(errorText(e));
     }
     finally { setBusy(false); }
   }
-  const hint = busy ? "ui.pleaseWait" : action === "create_local" && !name.trim() ? "ui.nameRequired" : action === "create_local" && password.length < 12 ? "ui.passwordMinimum" : action === "create_local" && password !== confirmation ? "ui.passwordMismatch" : action !== "connect" && !password ? "ui.localMasterPassword" : action === "import_local" && !source ? "ui.localVault" : "";
+  const hint = busy ? "ui.pleaseWait" : vaultForm && !filePath.trim() ? "ui.localFilenameRequired"
+    : vaultForm && fileChecking ? "ui.localFilenameChecking" : vaultForm && !fileInfo ? fileError || "ui.localFilenameRequired"
+    : vaultForm && !existing && password.length < 12 ? "ui.passwordMinimum"
+    : vaultForm && !existing && password !== confirmation ? "ui.passwordMismatch"
+    : action !== "connect" && !password ? "ui.localMasterPassword" : action === "import_local" && !source ? "ui.localVault" : "";
   return <div className={toolbar ? "local-vault-tools local-vault-toolbar" : "local-vault-tools"}>
     {!importsOnly && !status.unlocked && <>
       {!restoreOnly && <button type="button" className={toolbar ? "subtle" : "secondary"} disabled={parentBusy} onClick={() => open("create_local")}>{t("ui.createLocalVault")}</button>}
@@ -84,22 +124,35 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
     {error && !action && <p role="alert">{t(error)}</p>}
     {action && <dialog ref={dialog} className="discard-dialog local-vault-dialog" onCancel={(event) => { event.preventDefault(); close(); }}>
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <h2>{t(titles[action])}</h2>
-        <p>{t(action === "connect" ? "ui.connectLocalVaultHelp" : action === "import_local" ? "ui.localImportHelp" : action === "create_local" ? "ui.localVaultDescription" : "ui.localBackupHelp")}</p>
-        {action === "create_local" && <label>{t("ui.vaultName")}<input value={name} maxLength={256} required onChange={(e) => setName(e.target.value)} disabled={busy} /></label>}
+        <h2>{t(vaultForm ? "ui.localVault" : titles[action])}</h2>
+        <p>{t(vaultForm ? "ui.localFileFormHelp" : action === "connect" ? "ui.connectLocalVaultHelp" : action === "import_local" ? "ui.localImportHelp" : "ui.localBackupHelp")}</p>
+        {vaultForm && <>
+          <label>{t("ui.localVaultFile")}<span className="file-picker-row">
+            <input value={filePath} onChange={event => {setFilePath(event.target.value);setFileInfo(null);setError("");}} placeholder="vault.nvdb" disabled={busy} autoFocus required spellCheck={false} dir="ltr" />
+          </span></label>
+          <div className="local-file-actions">
+            <button type="button" className="secondary" disabled={busy} onClick={() => void pickTarget("new")}>{t("ui.localNewFile")}</button>
+            <button type="button" className="secondary" disabled={busy} onClick={() => void pickTarget("existing")}>{t("ui.localChooseFile")}</button>
+          </div>
+          {fileInfo && <div className="local-file-summary" role="status">
+            <p>{t(existing ? "ui.localFileExists" : "ui.localFileNew")}</p>
+            <small dir="ltr">{fileInfo.path}</small>
+          </div>}
+          {fileError && <p role="alert">{t(fileError)}</p>}
+        </>}
         {action === "import_local" && <label>{t("ui.localVault")}<select value={source} disabled={busy} onChange={(e) => onSource(e.target.value)} required>
           {localProfiles.map((p) => <option key={p.id} value={p.id}>{p.login}</option>)}
         </select></label>}
-        {action !== "connect" && <label>{t("ui.localMasterPassword")}<SecretInput  value={password} autoComplete={action === "create_local" ? "new-password" : "current-password"}
-          minLength={action === "create_local" ? 12 : undefined} required onChange={(e) => setPassword(e.target.value)} disabled={busy} /></label>}
-        {action === "create_local" && <label>{t("ui.confirmMasterPassword")}<SecretInput  value={confirmation} autoComplete="new-password"
+        {action !== "connect" && <label>{t("ui.localMasterPassword")}<SecretInput  value={password} autoComplete={vaultForm && !existing ? "new-password" : "current-password"}
+          minLength={vaultForm && !existing ? 12 : undefined} required onChange={(e) => setPassword(e.target.value)} disabled={busy} /></label>}
+        {vaultForm && !existing && <label>{t("ui.confirmMasterPassword")}<SecretInput  value={confirmation} autoComplete="new-password"
           required onChange={(e) => setConfirmation(e.target.value)} disabled={busy} /></label>}
         {error && <p role="alert">{t(error)}</p>}
         {hint && <p role="status" id="local-vault-hint">{t(hint)}</p>}
         <div className="discard-actions">
           <button type="button" className="secondary" disabled={busy} onClick={close}>{t("ui.cancel")}</button>
-          <button type="submit" aria-describedby="local-vault-hint" title={hint ? t(hint) : undefined} className="primary" disabled={busy || (action !== "connect" && !password) || (action === "create_local" && (password.length < 12 || password !== confirmation || !name.trim())) || (action === "import_local" && !source)}>
-            {busy ? t("ui.pleaseWait") : t(titles[action])}
+          <button type="submit" aria-describedby="local-vault-hint" title={hint ? t(hint) : undefined} className="primary" disabled={busy || !!hint}>
+            {busy ? t("ui.pleaseWait") : vaultForm ? t(existing ? "ui.open" : "ui.createLocalVault") : t(titles[action])}
           </button>
         </div>
       </form>

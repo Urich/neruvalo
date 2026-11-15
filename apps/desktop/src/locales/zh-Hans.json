@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "不支持此保险库的数据库或数据格式，无法打开。请使用兼容版本的应用或打开其他保险库。"
+  "ui.unsupportedVaultFormat": "不支持此保险库的数据库或数据格式，无法打开。请使用兼容版本的应用或打开其他保险库。",
+  "ui.openLocalVault": "打开本地保险库",
+  "ui.openLocalVaultHelp": "选择 cache.sqlite3 或 profile.json。两个文件必须位于同一文件夹中。请输入此保险库的主密码。",
+  "ui.localVaultFile": "保险库文件",
+  "ui.localVaultFilesMissing": "找不到保险库数据库或 profile.json。请将两个文件放在同一文件夹中并重新选择保险库。",
+  "ui.invalidLocalVaultFile": "此文件不是 Neruvalo 本地保险库。",
+  "ui.localFileFormHelp": "输入新文件名或选择现有保险库。新保险库保存为单个加密的 .nvdb 文件。",
+  "ui.localFileNew": "将在此处创建新保险库。",
+  "ui.localFileExists": "此文件已存在。请输入其主密码以打开。",
+  "ui.localChooseFile": "选择文件…",
+  "ui.localFilenameRequired": "请输入文件名或完整路径。",
+  "ui.localFilenameChecking": "正在检查文件…",
+  "ui.localInvalidFilePath": "请检查文件名并选择现有文件夹。",
+  "ui.localFileAlreadyExists": "文件已存在。请打开它或选择其他名称。",
+  "ui.localNewFile": "新建文件…"
 }

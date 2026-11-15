@@ -97,48 +97,57 @@ pub(super) async fn commit(
     Ok(json!({"record_id":r.record_id,"version_id":r.version_id,"revision":r.expected_revision+1}))
 }
 
+pub(super) fn new_profile(
+    name: &str,
+    password: &str,
+) -> Result<(Profile, AccountKeys, Zeroizing<[u8; 32]>)> {
+    ensure!(
+        !name.trim().is_empty() && name.len() <= 256,
+        "INVALID_VAULT_NAME"
+    );
+    ensure!(
+        password.len() >= 12,
+        "Use a master password of at least 12 characters"
+    );
+    let id = format!("local-{}", Uuid::new_v4());
+    let root = Zeroizing::new(crypto::random::<32>());
+    let keys = AccountKeys::generate();
+    let salt = crypto::random::<16>();
+    let password_key = crypto::password_key(password, &salt)?;
+    let keys_envelope = crypto::seal(
+        root.as_ref(),
+        &Zeroizing::new(serde_json::to_vec(&keys)?),
+        &keys_context("local", &id),
+    )?;
+    let profile = Profile {
+        kind: ProfileKind::Local,
+        id: id.clone(),
+        server: String::new(),
+        server_id: "local".into(),
+        account_id: id.clone(),
+        login: name.trim().into(),
+        opaque_public: String::new(),
+        bundle: AccountBundle {
+            envelope: json!({"keys":keys_envelope}),
+            public_sign: keys.public_sign(),
+            public_share: keys.public_share(),
+            recovery: None,
+        },
+        local_salt: b64(salt),
+        local_root: crypto::seal(
+            password_key.as_ref(),
+            root.as_ref(),
+            &local_context("local", &id),
+        )?,
+        timeout_seconds: 300,
+    };
+    Ok((profile, keys, root))
+}
+
 impl Client {
     pub async fn create_local(&mut self, name: &str, password: Zeroizing<String>) -> Result<Value> {
-        ensure!(
-            !name.trim().is_empty() && name.len() <= 256,
-            "INVALID_VAULT_NAME"
-        );
-        ensure!(
-            password.len() >= 12,
-            "Use a master password of at least 12 characters"
-        );
-        let id = format!("local-{}", Uuid::new_v4());
-        let root = Zeroizing::new(crypto::random::<32>());
-        let keys = AccountKeys::generate();
-        let salt = crypto::random::<16>();
-        let password_key = crypto::password_key(&password, &salt)?;
-        let keys_envelope = crypto::seal(
-            root.as_ref(),
-            &Zeroizing::new(serde_json::to_vec(&keys)?),
-            &keys_context("local", &id),
-        )?;
-        let profile = Profile {
-            kind: ProfileKind::Local,
-            id: id.clone(),
-            server: String::new(),
-            server_id: "local".into(),
-            account_id: id.clone(),
-            login: name.trim().into(),
-            opaque_public: String::new(),
-            bundle: AccountBundle {
-                envelope: json!({"keys":keys_envelope}),
-                public_sign: keys.public_sign(),
-                public_share: keys.public_share(),
-                recovery: None,
-            },
-            local_salt: b64(salt),
-            local_root: crypto::seal(
-                password_key.as_ref(),
-                root.as_ref(),
-                &local_context("local", &id),
-            )?,
-            timeout_seconds: 300,
-        };
+        let (profile, keys, root) = new_profile(name, &password)?;
+        let id = profile.id.clone();
         let db = cache(&self.dir, &id).await?;
         self.store_profile(&profile)?;
         self.lock();

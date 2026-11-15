@@ -343,5 +343,19 @@
   "ui.today": "Today",
   "ui.clearDate": "Clear date",
   "ui.invalidDate": "Enter a valid date in the displayed format.",
-  "ui.unsupportedVaultFormat": "इस वॉल्ट का डेटाबेस या डेटा प्रारूप समर्थित नहीं है। वॉल्ट नहीं खोला गया। ऐप के संगत संस्करण का उपयोग करें या दूसरा वॉल्ट खोलें।"
+  "ui.unsupportedVaultFormat": "इस वॉल्ट का डेटाबेस या डेटा प्रारूप समर्थित नहीं है। वॉल्ट नहीं खोला गया। ऐप के संगत संस्करण का उपयोग करें या दूसरा वॉल्ट खोलें।",
+  "ui.openLocalVault": "स्थानीय वॉल्ट खोलें",
+  "ui.openLocalVaultHelp": "cache.sqlite3 या profile.json चुनें। दोनों फ़ाइलें एक ही फ़ोल्डर में होनी चाहिए। इस वॉल्ट का मास्टर पासवर्ड दर्ज करें।",
+  "ui.localVaultFile": "वॉल्ट फ़ाइल",
+  "ui.localVaultFilesMissing": "वॉल्ट डेटाबेस या profile.json नहीं मिला। दोनों फ़ाइलों को एक ही फ़ोल्डर में रखें और वॉल्ट फिर से चुनें।",
+  "ui.invalidLocalVaultFile": "यह फ़ाइल Neruvalo का स्थानीय वॉल्ट नहीं है।",
+  "ui.localFileFormHelp": "नया फ़ाइल नाम दर्ज करें या मौजूदा वॉल्ट चुनें। नए वॉल्ट एक एन्क्रिप्टेड .nvdb फ़ाइल में सहेजे जाते हैं।",
+  "ui.localFileNew": "यहाँ नया वॉल्ट बनाया जाएगा।",
+  "ui.localFileExists": "यह फ़ाइल मौजूद है। खोलने के लिए इसका मास्टर पासवर्ड दर्ज करें।",
+  "ui.localChooseFile": "फ़ाइल चुनें…",
+  "ui.localFilenameRequired": "फ़ाइल नाम या पूरा पथ दर्ज करें।",
+  "ui.localFilenameChecking": "फ़ाइल की जाँच हो रही है…",
+  "ui.localInvalidFilePath": "फ़ाइल नाम जाँचें और मौजूदा फ़ोल्डर चुनें।",
+  "ui.localFileAlreadyExists": "फ़ाइल पहले से मौजूद है। इसे खोलें या दूसरा नाम चुनें।",
+  "ui.localNewFile": "नई फ़ाइल…"
 }

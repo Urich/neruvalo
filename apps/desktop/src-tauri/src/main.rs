@@ -78,7 +78,14 @@ async fn command(
             anyhow::bail!("Invalid launch configuration: {error}");
         }
         let mut c = state.client.lock().await;
-        if matches!(action.as_str(), "create_local" | "restore_local_backup") {
+        if matches!(
+            action.as_str(),
+            "create_local"
+                | "restore_local_backup"
+                | "open_local_path"
+                | "create_local_file"
+                | "local_pick_target"
+        ) {
             anyhow::ensure!(c.status()["unlocked"] != true, "LOCK_VAULT_FIRST");
         }
         if matches!(
@@ -301,6 +308,56 @@ async fn command(
                 anyhow::ensure!(c.status()["unlocked"] == true, "LOCKED");
                 attachment.save_to(&path.into_path().map_err(|_| anyhow!("Invalid path"))?)?;
                 Ok(json!(true))
+            }
+            "local_file_info" => c.local_file_info(&text(r, "path")?),
+            "local_pick_target" => {
+                let seed = c
+                    .local_file_path(
+                        r["path"]
+                            .as_str()
+                            .filter(|s| !s.trim().is_empty())
+                            .unwrap_or("vault.nvdb"),
+                    )
+                    .or_else(|_| c.local_file_path("vault.nvdb"))?;
+                let mut dialog = app
+                    .dialog()
+                    .file()
+                    .set_title(r["title"].as_str().unwrap_or("Choose vault file"))
+                    .set_file_name(seed.file_name().unwrap_or_default().to_string_lossy())
+                    .add_filter(
+                        "Neruvalo local vault",
+                        &["nvdb", "sqlite3", "sqlite", "db", "json"],
+                    )
+                    .add_filter("All files", &["*"]);
+                if let Some(parent) = seed.parent().filter(|p| p.is_dir()) {
+                    dialog = dialog.set_directory(parent);
+                }
+                // Opening uses an open dialog (no overwrite prompt); creating
+                // uses a save-path dialog so a not-yet-existing name is accepted.
+                // Neither dialog writes anything; the confirmed core action does.
+                let selected = if r["mode"] == "new" {
+                    dialog.blocking_save_file()
+                } else {
+                    dialog.blocking_pick_file()
+                };
+                let Some(path) = selected else {
+                    return Ok(Value::Null);
+                };
+                Ok(json!(path
+                    .into_path()
+                    .map_err(|_| anyhow!("Invalid path"))?
+                    .to_string_lossy()))
+            }
+            "create_local_file" => {
+                let password = secret(r, "password")?;
+                let confirmation = secret(r, "confirmation")?;
+                anyhow::ensure!(*password == *confirmation, "LOCAL_PASSWORD_MISMATCH");
+                c.create_local_file(&text(r, "path")?, password).await
+            }
+            "open_local_path" => {
+                anyhow::ensure!(c.status()["unlocked"] != true, "LOCK_VAULT_FIRST");
+                let path = c.local_file_path(&text(r, "path")?)?;
+                c.open_local(&path, secret(r, "password")?).await
             }
             "create_local" => {
                 c.create_local(&text(r, "name")?, secret(r, "password")?)
