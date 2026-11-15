@@ -1,3 +1,4 @@
+import { Icon } from "./Icon";
 import { useState } from "react";
 import { Attachments } from "./Attachments";
 import { Entry } from "./model";
@@ -33,13 +34,16 @@ export function HistoryVersion({
               <code>{secret && !revealed[key] ? "••••••••••••" : value}</code>
               {secret && (
                 <button
-                  className="subtle"
+                  className="subtle secret-toggle"
+                  aria-label={t(revealed[key] ? "ui.hide" : "ui.show")}
+                  title={t(revealed[key] ? "ui.hide" : "ui.show")}
+                  aria-pressed={!!revealed[key]}
                   type="button"
                   onClick={() =>
                     setRevealed({ ...revealed, [key]: !revealed[key] })
                   }
                 >
-                  {revealed[key] ? t("ui.hide") : t("ui.show")}
+                  <Icon name={revealed[key] ? "eye_off" : "eye"} />
                 </button>
               )}
             </div>

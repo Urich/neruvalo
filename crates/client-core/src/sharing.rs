@@ -20,11 +20,11 @@ fn content(data: &RecordData) -> Value {
 }
 fn verify_outgoing(a: &Unlocked, item: &Value) -> Result<SharedCopy> {
     let c: SharedCopy = serde_json::from_value(item["copy"].clone())?;
+    ensure!(c.format_version == 2, "UNSUPPORTED_VAULT_FORMAT");
     ensure!(
         c.owner_id == a.profile.account_id
             && c.owner_sign == a.keys.public_sign()
-            && c.server_id == a.profile.server_id
-            && c.format_version == 2,
+            && c.server_id == a.profile.server_id,
         "INVALID_SHARED_COPY"
     );
     ensure!(
@@ -36,6 +36,7 @@ fn verify_outgoing(a: &Unlocked, item: &Value) -> Result<SharedCopy> {
         "INVALID_SHARED_COPY"
     );
     crypto::verify(&a.keys.public_sign(), &c.transcript(), &c.signature)?;
+    attachments::validate_payload_format(&c.payload, true)?;
     Ok(c)
 }
 fn pin_named_identity(
@@ -75,30 +76,35 @@ fn pin_recipient(
 }
 fn make_copy(a: &Unlocked, data: &RecordData, mut c: SharedCopy) -> Result<SharedCopy> {
     let key = Zeroizing::new(crypto::random::<32>());
-    c.payload = serde_json::to_value(crypto::seal(
+    let (metadata, files) = attachments::split(data)?;
+    let record = crypto::seal(
         key.as_ref(),
-        &Zeroizing::new(serde_json::to_vec(&content(data))?),
+        &Zeroizing::new(serde_json::to_vec(&content(&metadata))?),
         &c.context(),
-    )?)?;
+    )?;
+    c.payload = serde_json::to_value(attachments::FilePayload {
+        format_version: 3,
+        record,
+        files,
+    })?;
     c.key_box = crypto::seal_shared_key(&c.recipient_share, key.as_ref())?;
     c.signature = a.keys.sign(&c.transcript());
     Ok(c)
 }
 fn read_copy(a: &Unlocked, c: &SharedCopy) -> Result<RecordData> {
+    ensure!(c.format_version == 2, "UNSUPPORTED_VAULT_FORMAT");
     ensure!(
-        c.format_version == 2
-            && c.server_id == a.profile.server_id
+        c.server_id == a.profile.server_id
             && c.recipient_id == a.profile.account_id
             && c.recipient_share == a.keys.public_share(),
         "INVALID_SHARED_COPY"
     );
     crypto::verify(&c.owner_sign, &c.transcript(), &c.signature)?;
+    attachments::validate_payload_format(&c.payload, true)?;
     let key = crypto::open_shared_key(&a.keys, &c.key_box)?;
-    let raw = crypto::open(
-        &key,
-        &serde_json::from_value(c.payload.clone())?,
-        &c.context(),
-    )?;
+    let payload: attachments::FilePayload<Envelope> = serde_json::from_value(c.payload.clone())?;
+    ensure!(payload.format_version == 3, "UNSUPPORTED_FORMAT");
+    let raw = crypto::open(&key, &payload.record, &c.context())?;
     let value: Value = serde_json::from_slice(&raw)?;
     let mut data = RecordData {
         record_type: value["record_type"]
@@ -117,8 +123,7 @@ fn read_copy(a: &Unlocked, c: &SharedCopy) -> Result<RecordData> {
         data.extra.insert("attachments".into(), attachments.clone());
     }
     ensure!(data.record_type != "group", "INVALID_SHARED_COPY");
-    data.validate()?;
-    Ok(data)
+    attachments::join(data, payload.files)
 }
 pub(super) async fn attach(a: &Unlocked, r: &mut SaveRecord, data: &RecordData) -> Result<()> {
     let state = cached(a).await?;
@@ -203,6 +208,21 @@ fn advance_guard(state: &Value, previous: &Value) -> Result<Value> {
             json!({"active":true,"revision":c.copy_revision,"digest":digest,"binding":binding});
     }
     Ok(next)
+}
+pub(super) async fn validate_cached_formats(a: &Unlocked) -> Result<()> {
+    let state = cached(a).await?;
+    validate_copy_set(&state)?;
+    for item in state["outgoing"]
+        .as_array()
+        .ok_or_else(|| anyhow!("INVALID_SHARED_SNAPSHOT"))?
+    {
+        verify_outgoing(a, item)?;
+    }
+    for item in state["incoming"].as_array().unwrap() {
+        let copy: SharedCopy = serde_json::from_value(item["copy"].clone())?;
+        read_copy(a, &copy)?;
+    }
+    Ok(())
 }
 pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<Value> {
     validate_copy_set(state)?;

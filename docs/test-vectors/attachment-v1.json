@@ -1,0 +1,11 @@
+{
+  "generator": "libsodium crypto_aead_xchacha20poly1305_ietf_encrypt",
+  "aad_utf8": "[\"neruvalo/file/v1\",\"00000000-0000-4000-8000-000000000001\",\"vector.bin\",3]",
+  "plaintext_base64": "AP8q",
+  "attachment": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "name": "vector.bin",
+    "size": 3,
+    "data": "{\"format_version\":1,\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"blob\":{\"format_version\":1,\"suite\":\"xchacha20poly1305-v1\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYX\",\"ciphertext\":\"nj0lJ3RMJ9ln1i809KvtkGhI1Q\"}}"
+  }
+}

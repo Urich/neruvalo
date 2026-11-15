@@ -151,6 +151,8 @@ impl Client {
             cache: db,
             online: false,
             needs_sync: false,
+            index_cache: BTreeMap::new(),
+            attachment_handles: attachments::Handles::default(),
         });
         Ok(self.status())
     }
@@ -257,6 +259,8 @@ impl Client {
             cache: db,
             online: false,
             needs_sync: false,
+            index_cache: BTreeMap::new(),
+            attachment_handles: attachments::Handles::default(),
         };
         let mut chains = BTreeMap::<String, (i64, String)>::new();
         let mut ids = BTreeSet::new();
@@ -359,9 +363,9 @@ impl Client {
             }
             let record_id = transfer.ids[&v.record_id].clone();
             let version_id = transfer.ids[&v.version_id].clone();
-            let payload = crypto::encrypt_version(
+            let payload = attachments::encrypt_record(
                 &target.keys,
-                &Zeroizing::new(serde_json::to_vec(&data)?),
+                &data,
                 &version_context(
                     &target.profile.server_id,
                     &target.profile.account_id,
@@ -378,7 +382,7 @@ impl Client {
                     .previous_version
                     .as_ref()
                     .map(|id| transfer.ids[id].clone()),
-                payload: serde_json::to_value(payload)?,
+                payload,
                 signature: String::new(),
                 archived: v.archived,
             };

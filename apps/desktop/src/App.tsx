@@ -1,6 +1,10 @@
+import { TotpDisplay, TotpEditor } from "./Totp";
+import { DateInput, dateField, displayDate } from "./DateInput";
+import { passwordExpired } from "./model";
+import { SecretInput, SecretTextarea } from "./SecretInput";
 import { EntryIcon, IconEditor } from "./RecordIcon";
 import { useDisabledHints } from "./disabledHints";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HistoryVersion } from "./HistoryVersion";
@@ -42,7 +46,7 @@ import {
   shortcutText,
   isMobile,
 } from "./preferences";
-import { Data, Entry, Profile, types, empty, errorText } from "./model";
+import { Data, Entry, Profile, types, empty, errorText, isUnsupportedVaultFormat } from "./model";
 type Status = {
   unlocked: boolean;
   online?: boolean;
@@ -73,6 +77,8 @@ export default function App() {
   const [draftGroup, setDraftGroup] = useState<string | null>(null);
   const [groupDraft, setGroupDraft] = useState<GroupDraft | null>(null);
   const [customName, setCustomName] = useState("");
+  const [totpInvalid, setTotpInvalid] = useState(false);
+  const [invalidDates, setInvalidDates] = useState<Set<string>>(new Set());
   const [launch, setLaunch] = useState<{
     pinned_server?: string;
     startup_error?: string;
@@ -91,6 +97,8 @@ export default function App() {
     action: () => void;
   } | null>(null);
   const [status, setStatus] = useState<Status>({ unlocked: false });
+  const statusProfile = useRef(status.profile);
+  statusProfile.current = status.profile;
   useEffect(() => {
     if (transferSource && status.unlocked && status.online && !status.local) setPage("imports");
   }, [transferSource, status.unlocked, status.online, status.local]);
@@ -113,6 +121,13 @@ export default function App() {
   const [ticket, setTicket] = useState("");
   const [certReady, setCertReady] = useState(false);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [recordsError, setRecordsError] = useState(false);
+  const [recordsRevision, setRecordsRevision] = useState(0);
+  const [indexLoading, setIndexLoading] = useState(false);
+  const lazyRecords = useRef({ queue: new Map<string, Entry>(), running: false });
+  const openingRecord = useRef(0);
+  const refreshingIndex = useRef(false);
   const [shareView, setShareView] = useState<"own" | "outgoing" | "received">(
     "own",
   );
@@ -156,7 +171,14 @@ export default function App() {
     wasUnlocked.current = false;
     generation.current++;
     setStatus({ unlocked: false });
+    setTotpInvalid(false);
     setEntries([]);
+    lazyRecords.current = { queue: new Map(), running: false };
+    openingRecord.current++;
+    setRecordsLoading(false);
+    setIndexLoading(false);
+    refreshingIndex.current = false;
+    setRecordsError(false);
     setReceived([]);
     setOutgoing([]);
     setShareTarget(null);
@@ -184,6 +206,16 @@ export default function App() {
     setCode("");
     setCertReady(false);
   };
+  async function rejectUnsupportedVault(error: unknown) {
+    if (!isUnsupportedVaultFormat(error)) return false;
+    await call("lock").catch(() => {});
+    // clear() also advances the generation, invalidating pending secret-bearing responses.
+    clear();
+    setTransferSource("");
+    setMode("login");
+    setError("ui.unsupportedVaultFormat");
+    return true;
+  }
   async function run(task: () => Promise<void>) {
     const epoch = generation.current;
     setBusy(true);
@@ -193,6 +225,7 @@ export default function App() {
       await task();
     } catch (e) {
       if (epoch !== generation.current) return;
+      if (await rejectUnsupportedVault(e)) return;
       setError(errorText(e));
       if (
         String(e).includes("RECORD_VERSION_MISMATCH") ||
@@ -206,51 +239,90 @@ export default function App() {
   }
   async function refresh() {
     const epoch = generation.current;
-    const s = await call<Status>("status");
-    if (epoch !== generation.current) return;
-    if (!s.unlocked) {
-      clear();
-      return;
-    }
-    const [list, groups, sharing] = await Promise.all([
-      call<Entry[]>("list", { expected_profile: s.profile }),
-      call<Group[]>("groups", { expected_profile: s.profile }),
-      call("sharing", { expected_profile: s.profile }),
-    ]);
-    if (epoch !== generation.current) return;
-    wasUnlocked.current = true;
-    setStatus(s);
-    setTimeoutSeconds(s.timeout_seconds ?? 60);
-    const owned = list.map((e) => ({
-      ...e,
-      share_count: (sharing?.outgoing ?? []).filter(
-        (g: any) => g.record_id === e.record_id,
-      ).length,
-    }));
-    setEntries(owned);
-    setReceived((previous) => {
-      const next = sharing?.incoming ?? [];
-      if (
-        next.some(
-          (e: Entry) => !previous.some((old) => old.record_id === e.record_id),
-        )
-      )
-        setNotice("ui.youHaveReceivedAccessToANewEntry");
-      return next;
-    });
-    setOutgoing(sharing?.outgoing ?? []);
-    if (sharing?.notifications?.length)
-      setNotice("ui.youHaveReceivedAccessToANewEntry");
-    setSelected((current) =>
-      current?.received
-        ? (sharing?.incoming ?? []).find(
-            (e: Entry) => e.record_id === current.record_id,
+    const loadState = { queue: new Map<string, Entry>(), running: false };
+    lazyRecords.current = loadState;
+    setRecordsLoading(false);
+    setRecordsError(false);
+    setIndexLoading(true);
+    refreshingIndex.current = true;
+    try {
+      const s = await call<Status>("status");
+      if (epoch !== generation.current || lazyRecords.current !== loadState) return;
+      if (!s.unlocked) {
+        if (wasUnlocked.current) clear(); else setStatus(s);
+        return;
+      }
+      // Keep the unlock screen visible until all vault data passes the initial load.
+      const [list, groups, sharing] = await Promise.all([
+        call<Entry[]>("list", { expected_profile: s.profile, summaries: true }),
+        call<Group[]>("groups", { expected_profile: s.profile }),
+        call("sharing", { expected_profile: s.profile }),
+      ]);
+      if (epoch !== generation.current || lazyRecords.current !== loadState) return;
+      wasUnlocked.current = true;
+      setStatus(s);
+      setTimeoutSeconds(s.timeout_seconds ?? 60);
+      const shareCounts = new Map<string,number>();
+      for (const share of sharing?.outgoing ?? []) shareCounts.set(share.record_id,(shareCounts.get(share.record_id) ?? 0)+1);
+      const owned = list.map((entry) => ({...entry,share_count:shareCounts.get(entry.record_id) ?? 0}));
+      setEntries(owned);
+      setRecordsRevision(value => value + 1);
+      setReceived((previous) => {
+        const next = sharing?.incoming ?? [];
+        if (
+          next.some(
+            (e: Entry) => !previous.some((old) => old.record_id === e.record_id),
           )
-        : current
-          ? owned.find((e) => e.record_id === current.record_id)
-          : current,
-    );
-    setSavedGroups(groups ?? []);
+        )
+          setNotice("ui.youHaveReceivedAccessToANewEntry");
+        return next;
+      });
+      setOutgoing(sharing?.outgoing ?? []);
+      if (sharing?.notifications?.length)
+        setNotice("ui.youHaveReceivedAccessToANewEntry");
+      setSelected((current) =>
+        current?.received
+          ? (sharing?.incoming ?? []).find(
+              (e: Entry) => e.record_id === current.record_id,
+            )
+          : current
+            ? (() => { const next = owned.find((e) => e.record_id === current.record_id); return next?.summary ? (next.version_id === current.version_id ? { ...current, share_count: next.share_count } : undefined) : next; })()
+            : current,
+      );
+      setSavedGroups(groups ?? []);
+    } catch (error) {
+      if (epoch === generation.current && lazyRecords.current === loadState) await rejectUnsupportedVault(error);
+      throw error;
+    } finally { if (lazyRecords.current === loadState) { refreshingIndex.current = false; if (epoch === generation.current) setIndexLoading(false); } }
+  }
+  function loadVisibleRecords(requested: Entry[]) {
+    const state = lazyRecords.current;
+    const epoch = generation.current;
+    for (const entry of requested) if (entry.summary && !entry.row_loaded) state.queue.set(entry.record_id, entry);
+    if (state.running || !state.queue.size) return;
+    state.running = true;
+    setRecordsLoading(true); setRecordsError(false);
+    void (async () => {
+      try {
+        while (state.queue.size) {
+          const batch = [...state.queue.values()].slice(0,50);
+          batch.forEach(entry => state.queue.delete(entry.record_id));
+          const loaded = await call<Entry[]>("list_records", { ids: batch.map(entry => entry.record_id), list_view: true, expected_profile: status.profile });
+          if (epoch !== generation.current || state !== lazyRecords.current) return;
+          const records = new Map(loaded.map(entry => [entry.record_id,entry]));
+          const versions = new Map(batch.map(entry => [entry.record_id,entry.version_id]));
+          setEntries(current => current.map(entry => {
+            const row = records.get(entry.record_id);
+            return row && entry.version_id === versions.get(entry.record_id) ? { ...row, share_count: entry.share_count } : entry;
+          }));
+        }
+      } catch (error) {
+        if (epoch === generation.current && state === lazyRecords.current && !await rejectUnsupportedVault(error)) { setRecordsError(true); setError(errorText(error)); }
+      } finally {
+        state.running = false;
+        if (epoch === generation.current && state === lazyRecords.current) setRecordsLoading(false);
+      }
+    })();
   }
   useEffect(() => {
     call("launch_config")
@@ -270,6 +342,7 @@ export default function App() {
     call<Profile[]>("profiles")
       .then(setProfiles)
       .catch((e) => setError(errorText(e)));
+    void refresh().catch(e => setError(errorText(e)));
     const timer = setInterval(() => {
       const epoch = generation.current;
       call<Status>("status")
@@ -277,6 +350,8 @@ export default function App() {
           if (epoch !== generation.current) return;
           if (!s.unlocked) {
             if (wasUnlocked.current) clear();
+          } else if (!wasUnlocked.current || s.profile !== statusProfile.current) {
+            if (!refreshingIndex.current) void refresh().catch(e => setError(errorText(e)));
           } else setStatus(s);
         })
         .catch(() => {});
@@ -527,8 +602,7 @@ export default function App() {
             disabled: busy || !(status.online || status.local) || needsSync || record.archived,
             action: safe(() =>
               requestLeave(() => {
-                open(record);
-                setDraft(structuredClone(record.data));
+                open(record, true);
               }),
             ),
           },
@@ -537,8 +611,7 @@ export default function App() {
             disabled: busy,
             action: safe(() =>
               requestLeave(() => {
-                open(record);
-                void loadHistory(record);
+                open(record, false, true);
               }),
             ),
           },
@@ -565,6 +638,7 @@ export default function App() {
     });
   }
   function selectGroup(group: Group) {
+    openingRecord.current++;
     requestLeave(() => {
       setSelected(undefined);
       setDraft(undefined);
@@ -600,18 +674,30 @@ export default function App() {
       setTreeReveal((n) => n + 1);
     });
   }
-  function open(entry: Entry) {
-    setGroupDraft(null);
-    const parent = parentOf(entry.data, groups);
-    setActiveGroup(parent);
-    setDraftGroup(parent);
-    setCustomName("");
-    setSelected(entry);
-    setDraft(undefined);
-    setHistory([]);
-    setRevealed({});
+  function open(entry: Entry, editing = false, history = false) {
+    const selection = ++openingRecord.current;
+    const epoch = generation.current;
+    const show = (record: Entry) => {
+      if (epoch !== generation.current || selection !== openingRecord.current) return;
+      setGroupDraft(null);
+      const parent = parentOf(record.data, groups);
+      setActiveGroup(parent); setDraftGroup(parent); setCustomName("");
+      setTotpInvalid(false);
+      setSelected(record); setDraft(editing ? structuredClone(record.data) : undefined);
+      setHistory([]); setRevealed({});
+      if (history) void loadHistory(record);
+    };
+    if (!entry.summary) { show(entry); return; }
+    void run(async () => {
+      const values = await call<Entry[]>("list_records", { ids: [entry.record_id], expected_profile: status.profile });
+      const record = values.find(value => value.record_id === entry.record_id);
+      if (!record) throw new Error("ui.recordUnavailable");
+      show({ ...record, share_count: entry.share_count });
+    });
   }
   function beginNew(recordType: string, parent: string | null = activeGroup) {
+    setTotpInvalid(false);
+    openingRecord.current++;
     setShareView("own");
     if (groups.find((g) => g.id === parent)?.archived) parent = null;
     setGroupDraft(null);
@@ -711,7 +797,9 @@ export default function App() {
   useDisabledHints(t(busy ? "ui.pleaseWait" : needsSync ? "ui.synchronizeAndReopenTheEntryBeforeSaving" : status.unlocked && !(status.online || status.local) ? "ui.offlineAccessIsReadOnly" : "ui.actionUnavailable"));
   const unchanged = !!draft && !!selected && JSON.stringify(draft) === JSON.stringify(selected.data) && draftGroup === (selected.data.group_id ?? null);
   async function save() {
-    if (!draft || unchanged) return;
+    if (!draft || unchanged || totpInvalid || invalidDates.size) return;
+    const invalidDate = detailPanel.current?.querySelector<HTMLInputElement>("input:invalid");
+    if (invalidDate) { invalidDate.reportValidity(); return; }
     await run(async () => {
       const result = await call("save", {
         id: selected?.record_id ?? null,
@@ -720,13 +808,22 @@ export default function App() {
         group: draftGroup,
         archived: selected?.archived ?? false,
       });
+      const saved = result?.record as Entry | undefined;
+      if (!saved) throw new Error("ui.recordUnavailable");
+      setEntries(current => {
+        const previous = current.find(entry => entry.record_id === saved.record_id);
+        const updated = {...saved,share_count:previous?.share_count ?? 0};
+        return previous ? current.map(entry => entry.record_id === saved.record_id ? updated : entry) : [...current,updated];
+      });
+      if (result.groups) setSavedGroups(result.groups);
       setActiveGroup(result?.group_id ?? draftGroup);
       if (!selected) setArchive(false);
       if (kind && kind !== draft.record_type) setKind("");
       setQuery("");
       setDraft(undefined);
-      setSelected(undefined);
-      await refresh();
+      setSelected({...saved,share_count:selected?.share_count ?? 0});
+      setRevealed({});
+      setHistory([]);
       setTreeReveal((n) => n + 1);
     });
   }
@@ -770,9 +867,9 @@ export default function App() {
     }
   }
 
-  const groups = groupsFor(entries, savedGroups);
-  const displayedEntries = entries.filter((entry) => !pendingArchive?.has(entry.record_id));
-  const tree = entryTree(
+  const groups = useMemo(() => groupsFor(entries, savedGroups), [entries, savedGroups]);
+  const displayedEntries = useMemo(() => entries.filter((entry) => !pendingArchive?.has(entry.record_id)), [entries, pendingArchive]);
+  const tree = useMemo(() => entryTree(
     shareView === "received" ? [] : groups.filter((group) => !pendingArchive?.has(group.id)),
     shareView === "received"
       ? received
@@ -781,7 +878,7 @@ export default function App() {
     kind,
     shareView === "received" ? false : archive,
     shareView === "outgoing",
-  );
+  ), [groups, displayedEntries, received, query, kind, archive, shareView, pendingArchive]);
   const visibleCount = (nodes: typeof tree): number =>
     nodes.reduce(
       (count, node) =>
@@ -803,6 +900,7 @@ export default function App() {
     "";
   const currentType = types[(draft ?? selected?.data)?.record_type ?? "login"];
   const localTools = (<LocalVaultTools
+        onUnsupportedVault={rejectUnsupportedVault}
         status={status} profiles={profiles} source={transferSource} busy={busy}
         toolbar={status.unlocked}
         onSource={setTransferSource}
@@ -1116,7 +1214,7 @@ export default function App() {
           {page === "about" ? (
             <About />
           ) : page === "imports" ? (
-            <Imports status={status} profiles={profiles} source={transferSource} busy={busy || needsSync}
+            <Imports onUnsupportedVault={rejectUnsupportedVault} status={status} profiles={profiles} source={transferSource} busy={busy || needsSync}
               onSource={setTransferSource} onChanged={async () => { await refresh(); setProfiles(await call("profiles")); }} />
           ) : page === "settings" ? (
             <div>
@@ -1320,8 +1418,7 @@ export default function App() {
                     )}
                     <label>
                       {t("ui.password")}
-                      <input
-                        type="password"
+                      <SecretInput
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         autoComplete={
@@ -1476,8 +1573,14 @@ export default function App() {
                       )}
                     </span>
                   </div>
+                  {indexLoading && <div role="status" className="records-loading"><span className="loading-spinner" aria-hidden="true" />{t("ui.loadingRecords")}</div>}
                   {tree.length ? (
                     <EntryTree
+                      loadKey={recordsRevision}
+                      loading={recordsLoading}
+                      loadFailed={recordsError}
+                      onVisibleEntries={loadVisibleRecords}
+                      resetKey={`${status.profile}-${query}-${kind}-${archive}-${shareView}`}
                       reveal={treeReveal}
                       nodes={tree}
                       activeGroup={selectedGroup?.id ?? null}
@@ -1487,7 +1590,7 @@ export default function App() {
                       searching={!!query.trim()}
                     />
                   ) : (
-                    <div className="empty">
+                    !indexLoading && <div className="empty">
                       <span>◇</span>
                       <h3>{t("ui.noEntriesHereYet")}</h3>
                       <p>
@@ -1532,6 +1635,7 @@ export default function App() {
                         disabled={!!selected}
                         onChange={(key) =>
                           requestLeave(() => {
+                            setTotpInvalid(false);
                             setDraft({ ...empty(key), folder: draft.folder, ...(draft.attachments ? { attachments: draft.attachments, schema_version: 2 } : {}) });
                             setCustomName("");
                           })
@@ -1570,43 +1674,23 @@ export default function App() {
                               ))}
                             </select>
                           </label>
-                          <label className="check">
-                            <input
-                              type="checkbox"
-                              checked={draft.fields.never_expires === "true"}
-                              onChange={(e) =>
-                                setDraft({
-                                  ...draft,
-                                  fields: {
-                                    ...draft.fields,
-                                    never_expires: String(e.target.checked),
-                                  },
-                                })
-                              }
-                            />
-                            {t("ui.noExpiryDate")}
-                          </label>
                         </>
                       )}
                       {fieldsOf(draft)
-                        .filter(
-                          ([key]) =>
-                            !(
-                              draft.record_type === "document" &&
-                              key === "expires" &&
-                              draft.fields.never_expires === "true"
-                            ),
-                        )
-                        .map(([key, title, secret, multiline]) => (
+                        .filter(([key]) => key !== "totp")
+                        .map(([key, title, secret, multiline]) => {
+                          const FieldInput = secret ? SecretInput : "input";
+                          const FieldTextarea = secret ? SecretTextarea : "textarea";
+                          return (
                           <label key={key}>
                             {key.startsWith("custom:") ? title : t(title)}
                             {multiline ? (
-                              <textarea
+                              <FieldTextarea
                                 rows={4}
                                 className={secret ? "secret-input" : undefined}
                                 spellCheck={false}
                                 autoComplete="off"
-                                value={draft.fields[key] ?? ""}
+                                value={key === "expires" && draft.record_type !== "bank_card" && draft.fields.never_expires === "true" ? "" : draft.fields[key] ?? ""}
                                 onChange={(e) =>
                                   setDraft({
                                     ...draft,
@@ -1622,24 +1706,35 @@ export default function App() {
                                 className={
                                   key === "password"
                                     ? "password-generator-field"
-                                    : undefined
+                                    : "record-input-row"
                                 }
                               >
-                                <input
-                                  type={secret && !revealed[key] ? "password" : "text"}
+                                {dateField(draft.record_type,key) ? <DateInput
+                                  key={`${selected?.record_id ?? "new"}-${draft.record_type}-${key}`}
+                                  month={draft.record_type === "bank_card"}
+                                  onValidity={valid => setInvalidDates(previous => {
+                                    const field = `${selected?.record_id ?? "new"}-${draft.record_type}-${key}`;
+                                    if (previous.has(field) === !valid) return previous;
+                                    const next = new Set(previous); if (valid) next.delete(field); else next.add(field); return next;
+                                  })}
+                                  value={key === "expires" && draft.record_type !== "bank_card" && draft.fields.never_expires === "true" ? "" : draft.fields[key] ?? ""}
+                                  onValueChange={value => setDraft(current => current ? {...current,fields:{...current.fields,[key]:value,...(key === "expires" && current.record_type !== "bank_card" ? {never_expires:String(!value)} : {})}} : current)} /> : (
+                                <FieldInput
+                                  type="text"
                                   autoComplete="off"
-                                  value={draft.fields[key] ?? ""}
+                                  value={key === "expires" && draft.record_type !== "bank_card" && draft.fields.never_expires === "true" ? "" : draft.fields[key] ?? ""}
                                   onChange={(e) =>
                                     setDraft({
                                       ...draft,
                                       fields: {
                                         ...draft.fields,
                                         [key]: e.target.value,
+                                        ...(key === "expires" && draft.record_type !== "bank_card" ? {never_expires: String(!e.target.value)} : {}),
                                       },
                                     })
                                   }
                                 />
-                                {secret && <button type="button" className="secondary secret-toggle" aria-label={t(revealed[key] ? "ui.hide" : "ui.show")} title={t(revealed[key] ? "ui.hide" : "ui.show")} aria-pressed={!!revealed[key]} onClick={() => setRevealed({ ...revealed, [key]: !revealed[key] })}><Icon name={revealed[key] ? "eye_off" : "eye"} /></button>}
+                                )}
                                 {key === "password" && (
                                   <button
                                     type="button"
@@ -1668,7 +1763,13 @@ export default function App() {
                               </span>
                             )}
                           </label>
-                        ))}
+                          );
+                        })}
+                      {(draft.record_type === "login" || !!draft.fields.totp) && <TotpEditor
+                        key={`totp-${status.profile}-${selected?.record_id ?? "new"}-${draft.record_type}`}
+                        value={draft.fields.totp ?? ""} profile={status.profile}
+                        onValidity={valid => setTotpInvalid(!valid)}
+                        onChange={value => setDraft(current => current ? {...current,fields:{...current.fields,totp:value}} : current)} />}
                       {draft.record_type === "document" && (
                         <div className="two">
                           <label>
@@ -1747,16 +1848,16 @@ export default function App() {
                           />
                         </label>
                       </div>
-                      <IconEditor value={draft.icon} onChange={(icon) => setDraft(current => current ? { ...current, icon } : current)} />
+                      <IconEditor value={draft.icon} builtin={draft.keepass_icon_id} onChange={(icon) => setDraft(current => current ? { ...current, icon, keepass_icon_id: undefined } : current)} />
                       <button
                         className="primary full"
                         disabled={
                           busy ||
                           needsSync ||
                           !(status.online || status.local) ||
-                          !draft.title.trim() || unchanged
+                          !draft.title.trim() || unchanged || totpInvalid || !!invalidDates.size
                         }
-                        title={unchanged ? t("ui.noChanges") : !draft.title.trim() ? t("ui.recordTitleRequired") : undefined}
+                        title={invalidDates.size ? t("ui.invalidDate") : totpInvalid ? t("ui.invalidTotp") : unchanged ? t("ui.noChanges") : !draft.title.trim() ? t("ui.recordTitleRequired") : undefined}
                         onClick={save}
                       >
                         {t("ui.encryptAndSave")}
@@ -1771,6 +1872,7 @@ export default function App() {
                           </span>
                           <h2>
                             <bdi>{selected.data.title}</bdi>
+                            {passwordExpired(selected.data) && <span className="expired-indicator" role="img" aria-label={t("ui.passwordExpired")} title={t("ui.passwordExpired")}><Icon name="expired" /></span>}
                           </h2>
                         </div>
                         <span className="large-icon">
@@ -1780,12 +1882,14 @@ export default function App() {
                           />
                         </span>
                       </div>
-                      <dl className="record-dates">{([['created_at', 'createdDate'], ['modified_at', 'modifiedDate'], ['archived_at', 'archivedDate']] as const).filter(([key]) => key !== 'archived_at' || selected.archived || selected.data.archived_at).map(([key, label]) => <div key={key}><dt>{t(`ui.${label}`)}</dt><dd>{selected.data[key] ? new Date(selected.data[key]! * 1000).toLocaleString(language) : t("ui.unknownDate")}</dd></div>)}</dl>
+                      <dl className="record-dates">{([['created_at', 'createdDate'], ['modified_at', 'modifiedDate'], ['archived_at', 'archivedDate']] as const).filter(([key]) => key !== 'archived_at' || selected.archived || selected.data.archived_at).map(([key, label]) => <div key={key}><dt>{t(`ui.${label}`)}</dt><dd>{selected.data[key] != null ? new Date(selected.data[key]! * 1000).toLocaleString(language) : t("ui.unknownDate")}</dd></div>)}</dl>
+                      {selected.data.fields.totp && <TotpDisplay key={`${status.profile}-${selected.record_id}-${selected.version_id}`} entry={selected} profile={status.profile} clipboardSeconds={clipboardSeconds} onCopied={() => setNotice("ui.copied")} />}
                       {fieldsOf(selected.data)
+                        .filter(([key]) => key !== "totp")
                         .filter(
                           ([key]) =>
                             !(
-                              selected.data.record_type === "document" &&
+                              ["login", "document"].includes(selected.data.record_type) &&
                               key === "expires" &&
                               selected.data.fields.never_expires === "true"
                             ),
@@ -1801,7 +1905,7 @@ export default function App() {
                                 <code>
                                   {secret && !revealed[key]
                                     ? "••••••••••••"
-                                    : value}
+                                    : dateField(selected.data.record_type,key) ? displayDate(value,selected.data.record_type === "bank_card") : value}
                                 </code>
                                 <span>
                                   {secret && (
@@ -1833,8 +1937,8 @@ export default function App() {
                             </div>
                           ) : null;
                         })}
-                      {selected.data.record_type === "document" &&
-                        selected.data.fields.never_expires === "true" && (
+                      {["login", "document"].includes(selected.data.record_type) &&
+                        (selected.data.fields.never_expires === "true" || !selected.data.fields.expires) && (
                           <p>{t("ui.noExpiryDate")}</p>
                         )}
                       {parentOf(selected.data, groups) && (
@@ -1955,7 +2059,7 @@ export default function App() {
                     </>
                   ) : selectedGroup ? (
                     <div className="group-detail">
-                      <Icon name="folder" />
+                      <EntryIcon name="folder" data={selectedGroup} />
                       <h2>
                         <bdi>{selectedGroup.title}</bdi>
                       </h2>

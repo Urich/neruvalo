@@ -1,7 +1,9 @@
 import { catalogs } from "./i18n";
+// `data` is an opaque native session handle; file bytes and keys never enter the webview.
 export type Attachment = { id: string; name: string; size: number; data: string };
 export type Data = {
   icon?: string;
+  keepass_icon_id?: number;
   created_at?: number;
   modified_at?: number;
   archived_at?: number;
@@ -16,6 +18,8 @@ export type Data = {
   tags: string[];
 };
 export type Entry = {
+  summary?: boolean;
+  row_loaded?: boolean;
   received?: boolean;
   owner_login?: string;
   share_id?: string;
@@ -40,6 +44,7 @@ export const types: Record<
       ["password", "ui.password", true],
       ["url", "ui.websiteAddress", false],
       ["totp", "ui.totpSecret", true],
+      ["expires", "ui.expiry", false],
     ],
   },
   bank_card: {
@@ -138,10 +143,17 @@ export function filterEntries(
       ),
   );
 }
+export function isUnsupportedVaultFormat(error: unknown): boolean {
+  return /UNSUPPORTED_(?:VAULT_FORMAT|LOCAL_SCHEMA|PROTOCOL|FORMAT|TYPE|ATTACHMENT_FORMAT)\b|unsupported envelope/.test(String(error));
+}
 export function errorText(error: unknown): string {
   const s = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, "");
   if (Object.hasOwn(catalogs.en, s)) return s;
+  if (isUnsupportedVaultFormat(s)) return "ui.unsupportedVaultFormat";
   const messages: [RegExp, string][] = [
+    [/INVALID_TOTP_QR/, "invalidTotpQr"],
+    [/INVALID_TOTP_TIME/, "invalidTotpTime"],
+    [/INVALID_TOTP/, "invalidTotp"],
     [/KEEPASS_OPEN_FAILED|KEEPASS_INVALID_KEYFILE|KEEPASS_KEY_REQUIRED|KEEPASS_INVALID_FILE/, "keepassOpenFailed"],
     [/KEEPASS_RESOURCE_LIMIT/, "keepassResourceLimit"],
     [/KEEPASS_UNSUPPORTED_VERSION/, "keepassUnsupported"],
@@ -211,4 +223,12 @@ export function errorText(error: unknown): string {
     return "ui.offlineAccessIsReadOnly";
   if (s.includes("LOCKED")) return "ui.vaultIsLocked";
   return "ui.operationFailedCheckYourConnectionAndTryAgain";
+}
+
+export function passwordExpired(data: Data, now = Date.now()): boolean {
+  if (data.record_type !== "login") return false;
+  if (data.fields.never_expires === "true" || !data.fields.expires) return false;
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data.fields.expires);
+  const expiry = date ? new Date(Number(date[1]),Number(date[2])-1,Number(date[3])+1).getTime() : Date.parse(data.fields.expires);
+  return Number.isFinite(expiry) && expiry <= now;
 }

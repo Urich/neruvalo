@@ -7,6 +7,8 @@ export type Group = {
   legacy_path?: string | null;
   revision?: number;
   archived?: boolean;
+  icon?: string | null;
+  keepass_icon_id?: number | null;
 };
 export function groupsFor(entries: Entry[], saved: Group[]): Group[] {
   const groups = saved.map((g) => ({ ...g }));
@@ -92,13 +94,16 @@ export function entryTree(
     const target = parent ? nodes.get(parent)?.children : undefined;
     (target ?? roots).push(node);
   }
+  const legacyGroups = new Map(groups.filter(group => group.legacy_path).map(group => [group.legacy_path!, group.id]));
   for (const entry of entries)
     if (
       entry.archived === archive &&
       (!kind || entry.data.record_type === kind)
     ) {
       const node = { key: entry.record_id, entry, children: [] };
-      const parent = parentOf(entry.data, groups);
+      const parent = entry.data.group_id !== undefined
+        ? (entry.data.group_id && nodes.has(entry.data.group_id) ? entry.data.group_id : null)
+        : (legacyGroups.get(entry.data.folder) ?? null);
       (parent ? nodes.get(parent)!.children : roots).push(node);
     }
   const filter = (list: TreeNode[], ancestorMatch = false): TreeNode[] =>

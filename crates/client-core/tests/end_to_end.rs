@@ -334,7 +334,7 @@ async fn server_idempotency_authorization_and_tampered_requests() {
     );
     c.sync().await.unwrap();
     assert_eq!(c.history(&request.record_id).await.unwrap().len(), 2);
-    request.payload["data"]["ciphertext"] = Value::String("changed".into());
+    request.payload["record"]["data"]["ciphertext"] = Value::String("changed".into());
     let bad = http
         .post(format!("{server}/api/v1/records/save"))
         .bearer_auth(&session.token)
@@ -629,12 +629,9 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
     original.tags = vec!["PRIVATE-TAG".into()];
     original.notes = "shared notes".into();
     // Exercise a file large enough that its encrypted shared update exceeds the old 2 MiB request limit.
-    let attachment = neruvalo_client::Attachment {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: "certificate.bin".into(),
-        size: 1024 * 1024,
-        data: crypto::b64(vec![0xA5; 1024 * 1024]),
-    };
+    let attachment =
+        neruvalo_client::Attachment::from_bytes("certificate.bin".into(), &vec![0xA5; 1024 * 1024])
+            .unwrap();
     original.schema_version = 2;
     original
         .extra
@@ -671,6 +668,11 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
         received["incoming"][0]["data"]["attachments"][0]["data"],
         attachment.data
     );
+    let shared_file: neruvalo_client::Attachment =
+        serde_json::from_value(received["incoming"][0]["data"]["attachments"][0].clone()).unwrap();
+    let shared_path = root.join("received-file.bin");
+    shared_file.save_to(&shared_path).unwrap();
+    assert_eq!(std::fs::read(shared_path).unwrap(), vec![0xA5; 1024 * 1024]);
     assert_eq!(
         owner.history(&id).await.unwrap()[0].data.extra["attachments"][0]["name"],
         "certificate.bin"
@@ -853,26 +855,28 @@ async fn local_vault_backup_history_and_idempotent_server_transfer() {
         .as_str()
         .unwrap()
         .to_owned();
+    let local_file =
+        neruvalo_client::Attachment::from_bytes("local.bin".into(), b"local attachment bytes")
+            .unwrap();
+    let mut initial_data = data("Local secret", "never plaintext on disk");
+    initial_data.schema_version = 2;
+    initial_data.extra.insert(
+        "attachments".into(),
+        serde_json::json!([local_file.clone()]),
+    );
+    let mut updated_data = data("Updated", "second secret");
+    updated_data.schema_version = 2;
+    updated_data
+        .extra
+        .insert("attachments".into(), serde_json::json!([local_file]));
     let first = c
-        .save_in_group(
-            None,
-            0,
-            data("Local secret", "never plaintext on disk"),
-            false,
-            Some(&group),
-        )
+        .save_in_group(None, 0, initial_data, false, Some(&group))
         .await
         .unwrap();
     let id = first["record_id"].as_str().unwrap();
-    c.save_in_group(
-        Some(id.into()),
-        1,
-        data("Updated", "second secret"),
-        false,
-        Some(&group),
-    )
-    .await
-    .unwrap();
+    c.save_in_group(Some(id.into()), 1, updated_data, false, Some(&group))
+        .await
+        .unwrap();
     c.archive_tree(&group, true).await.unwrap();
     assert!(c.list().await.unwrap()[0].archived);
     c.archive_tree(&group, false).await.unwrap();
@@ -967,6 +971,14 @@ async fn local_vault_backup_history_and_idempotent_server_transfer() {
     assert_eq!(imported.len(), 2);
     let migrated = imported.iter().find(|v| v.data.title == "Updated").unwrap();
     assert_ne!(migrated.record_id, id);
+    let migrated_file: neruvalo_client::Attachment =
+        serde_json::from_value(migrated.data.extra["attachments"][0].clone()).unwrap();
+    let migrated_path = root.join("migrated-file.bin");
+    migrated_file.save_to(&migrated_path).unwrap();
+    assert_eq!(
+        std::fs::read(migrated_path).unwrap(),
+        b"local attachment bytes"
+    );
     assert_eq!(c.history(&migrated.record_id).await.unwrap().len(), 4);
     assert_eq!(c.groups().await.unwrap().len(), 1);
     c.import_local(&local_id, password()).await.unwrap();
@@ -991,5 +1003,163 @@ async fn local_vault_backup_history_and_idempotent_server_transfer() {
         .unwrap()
         .iter()
         .any(|v| v.data.title == "Later local edit"));
+    task.abort();
+}
+
+#[tokio::test]
+async fn totp_works_for_server_offline_cache_and_received_records() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let (server, handle) = start(root).await;
+    let mut owner = Client::new(root.join("totp-owner")).unwrap();
+    register(&mut owner, &server, "totp_owner", root).await;
+    owner
+        .login(&server, "totp_owner", password())
+        .await
+        .unwrap();
+    owner.settings(900).await.unwrap();
+    let mut recipient = Client::new(root.join("totp-recipient")).unwrap();
+    register(&mut recipient, &server, "totp_recipient", root).await;
+    recipient
+        .login(&server, "totp_recipient", password())
+        .await
+        .unwrap();
+    recipient.settings(900).await.unwrap();
+    let uri="otpauth://totp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Example&algorithm=SHA1&digits=8&period=30";
+    let mut record = data("TOTP account", "password");
+    record.fields.insert("totp".into(), uri.into());
+    let saved = owner.save(None, 0, record, false).await.unwrap();
+    let id = saved["record_id"].as_str().unwrap();
+    let config = neruvalo_client::totp::TotpConfig::parse(uri).unwrap();
+    let current = owner.totp_code(id, None).await.unwrap();
+    assert_eq!(current.code, config.at(current.generated_at).unwrap().code);
+    owner
+        .share_change("create", id, "totp_recipient")
+        .await
+        .unwrap();
+    recipient.sync().await.unwrap();
+    let shares = recipient.sharing().await.unwrap();
+    let shared_id = shares["incoming"][0]["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let current = recipient.totp_code(&shared_id, None).await.unwrap();
+    assert_eq!(current.code, config.at(current.generated_at).unwrap().code);
+    let recipient_profile = recipient.status()["profile"].as_str().unwrap().to_owned();
+    recipient.lock();
+    assert!(recipient.totp_code(&shared_id, None).await.is_err());
+    recipient
+        .unlock_offline(&recipient_profile, password())
+        .await
+        .unwrap();
+    let current = recipient.totp_code(&shared_id, None).await.unwrap();
+    assert_eq!(current.code, config.at(current.generated_at).unwrap().code);
+    assert!(recipient
+        .totp_qr(&shared_id, None)
+        .await
+        .unwrap()
+        .starts_with("data:image/svg+xml;base64,"));
+    let owner_profile = owner.status()["profile"].as_str().unwrap().to_owned();
+    owner.lock();
+    owner
+        .unlock_offline(&owner_profile, password())
+        .await
+        .unwrap();
+    let current = owner.totp_code(id, None).await.unwrap();
+    assert_eq!(current.code, config.at(current.generated_at).unwrap().code);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn incompatible_server_payload_blocks_login_and_locks_sync() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (server, task) = start(root).await;
+    let mut client = Client::new(root.join("client")).unwrap();
+    register(&mut client, &server, "formatcheck", root).await;
+    client
+        .login(&server, "formatcheck", password())
+        .await
+        .unwrap();
+    client
+        .save(None, 0, data("Compatible", "test value"), false)
+        .await
+        .unwrap();
+    let id = client.status()["profile"].as_str().unwrap().to_owned();
+    let profile: Profile = serde_json::from_slice(
+        &std::fs::read(root.join("client").join(&id).join("profile.json")).unwrap(),
+    )
+    .unwrap();
+    let local_key =
+        crypto::password_key(&password(), &crypto::unb64(&profile.local_salt).unwrap()).unwrap();
+    let root_key = crypto::open(
+        local_key.as_ref(),
+        &profile.local_root,
+        &crypto::account_context(&profile.server_id, &profile.account_id, "local-root"),
+    )
+    .unwrap();
+    let raw_keys = crypto::open(
+        &root_key,
+        &serde_json::from_value(profile.bundle.envelope["keys"].clone()).unwrap(),
+        &crypto::account_context(&profile.server_id, &profile.account_id, "keys"),
+    )
+    .unwrap();
+    let keys: crypto::AccountKeys = serde_json::from_slice(&raw_keys).unwrap();
+    let pool = sqlx::AnyPool::connect(&std::env::var("NERUVALO_TEST_DATABASE_URL").unwrap_or_else(
+        |_| neruvalo_client::sqlite_database_url(&root.join("server.sqlite3")).unwrap(),
+    ))
+    .await
+    .unwrap();
+    let (body,): (String,) = sqlx::query_as("SELECT body FROM versions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let mut version: StoredVersion = serde_json::from_str(&body).unwrap();
+    version.payload["format_version"] = serde_json::json!(999);
+    let request = SaveRecord {
+        operation_id: version.operation_id.clone(),
+        record_id: version.record_id.clone(),
+        expected_revision: version.revision - 1,
+        version_id: version.version_id.clone(),
+        previous_version: version.previous_version.clone(),
+        payload: version.payload.clone(),
+        archived: version.archived,
+        signature: String::new(),
+    };
+    version.signature = keys.sign(&neruvalo_protocol::record_transcript(
+        &profile.server_id,
+        &profile.account_id,
+        &request,
+    ));
+    sqlx::query("UPDATE versions SET body=$1 WHERE id=$2")
+        .bind(serde_json::to_string(&version).unwrap())
+        .bind(&version.version_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = client.sync().await.unwrap_err();
+    assert!(neruvalo_client::is_unsupported_vault_error(&error));
+    assert_eq!(client.status()["unlocked"], false);
+    let mut fresh = Client::new(root.join("fresh-client")).unwrap();
+    let error = fresh
+        .login(&server, "formatcheck", password())
+        .await
+        .unwrap_err();
+    assert!(neruvalo_client::is_unsupported_vault_error(&error));
+    assert_eq!(fresh.status()["unlocked"], false);
+    // Rejection does not delete or replace the last compatible offline cache.
+    client.unlock_offline(&id, password()).await.unwrap();
+    assert_eq!(client.list().await.unwrap()[0].data.title, "Compatible");
+    sqlx::query("UPDATE versions SET body=$1 WHERE id=$2")
+        .bind(body)
+        .bind(&version.version_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    fresh
+        .login(&server, "formatcheck", password())
+        .await
+        .unwrap();
+    assert_eq!(fresh.status()["unlocked"], true);
     task.abort();
 }

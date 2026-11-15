@@ -1,3 +1,4 @@
+import { SecretInput } from "./SecretInput";
 import { useEffect, useState } from "react";
 import { useI18n } from "./i18n";
 export type ProxyConfig = {
@@ -98,8 +99,7 @@ export function ProxySettings({
                   </label>
                   <label>
                     {t("ui.proxyPassword")}
-                    <input
-                      type="password"
+                    <SecretInput
                       autoComplete="off"
                       value={value.password}
                       disabled={working || disabled}

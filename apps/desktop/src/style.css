@@ -1063,7 +1063,7 @@ kbd {
 .sidebar .brand { margin-bottom: 28px; }
 .sidebar-bottom { margin-top: auto; }
 .sidebar-bottom .sidebar-foot { margin-top: 0; padding: 20px 12px 0; }
-.type-dropdown .type-select-trigger { min-height: 44px; justify-content: flex-start; }
+.type-dropdown .type-select-trigger { min-height: var(--control-height); justify-content: flex-start; }
 .type-select-trigger > span:first-of-type { flex: 1; }
 .type-options button {
   padding: 11px 12px;
@@ -1156,3 +1156,97 @@ kbd {
 .icon-editor-controls > button { flex-shrink: 0; }
 .secret-toggle { display: inline-flex; align-items: center; justify-content: center; }
 .password-generator-field .secret-toggle { width: auto; flex-shrink: 0; }
+
+/* A shared height and baseline for controls placed side by side. */
+:root { --control-height: 42px; }
+input:not([type="checkbox"]):not([type="radio"]) {
+  height: var(--control-height); line-height: 20px; padding-block: 10px;
+}
+/* Native selects need the full inner height for platform text rendering. */
+select {
+  height: var(--control-height);
+  padding-block: 0;
+  line-height: normal;
+}
+.primary, .secondary {
+  min-height: var(--control-height); line-height: 20px; padding-block: 10px;
+}
+.primary { border: 1px solid transparent; }
+.two, .detail-panel > .two { align-items: flex-end; }
+.two > button { min-height: var(--control-height); margin-block: 16px; }
+.password-generator-field, .record-input-row {
+  display: flex; align-items: center; gap: 10px; margin-top: 7px;
+}
+.password-generator-field > input, .record-input-row > input { margin-top: 0; }
+.password-generator-field > .secret-field, .record-input-row > .secret-field { flex: 1; min-width: 0; margin-top: 0; }
+.secret-field {
+  position: relative; display: block; width: 100%; margin-top: 7px; font-weight: 400;
+}
+.secret-field > input, .secret-field > textarea { margin-top: 0; padding-right: 46px; }
+.secret-field > .secret-toggle {
+  position: absolute; top: 1px; right: 1px; width: 40px; height: 40px; padding: 0;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted);
+}
+.secret-toggle:hover:not(:disabled) { background: var(--secondary); }
+.secret-masked { -webkit-text-security: disc; }
+.field > div { flex-wrap: nowrap; }
+.field code { min-width: 0; }
+.field .secret-toggle, .field code + span { flex-shrink: 0; }
+@media (max-width: 700px) {
+  .password-generator-field > .secret-field { flex-basis: 100%; }
+  .password-generator-field .secret-field > .secret-toggle { width: 40px; }
+}
+
+.file-picker-row { display: flex; gap: 10px; align-items: center; margin-top: 7px; }
+.file-picker-row > input { flex: 1; min-width: 0; margin-top: 0; }
+.file-picker-row > button { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 480px) {
+  .file-picker-row { flex-wrap: wrap; }
+  .file-picker-row > input { flex-basis: 100%; }
+}
+
+.keepass-record-icon { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; font-size: 24px; line-height: 1; }
+
+.expired-indicator { display: inline-flex; align-items: center; color: var(--warning); margin-inline-start: 6px; vertical-align: middle; flex-shrink: 0; }
+.expired-indicator .icon { width: 15px; height: 15px; }
+.records-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--muted); font-size: 12px; }
+.loading-spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: records-spin .8s linear infinite; }
+@keyframes records-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading-spinner { animation: none; } }
+
+.totp-panel, .totp-editor { border: 1px solid var(--border); border-radius: 9px; padding: 16px; margin-block: 16px; }
+.totp-editor > summary, .totp-panel summary { cursor: pointer; font-weight: 600; }
+.totp-settings { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 15px; }
+.totp-token { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-block: 12px; }
+.totp-token > code { font-size: 24px; font-variant-numeric: tabular-nums; letter-spacing: 2px; }
+.totp-token > progress { width: 85px; accent-color: var(--accent); }
+.totp-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-block: 12px; }
+.totp-qr { display: block; max-width: 100%; width: 256px; height: 256px; background: white; margin-block: 12px; }
+@media(max-width:480px) { .totp-settings { grid-template-columns: 1fr; } }
+/* Native calendar editors need their full inner height, like native selects. */
+input[type="date"], input[type="month"] { padding-block: 0; line-height: normal; min-width: 0; }
+
+.calendar-field { position: relative; display: block; width: 100%; margin-top: 7px; }
+.record-input-row > .calendar-field { flex: 1; min-width: 0; margin-top: 0; }
+.calendar-field > input { margin-top: 0; padding-right: 46px; }
+.calendar-toggle { position: absolute; top: 1px; right: 1px; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 8px; background: transparent; color: var(--muted); }
+.calendar-toggle:hover:not(:disabled) { background: var(--secondary); }
+.date-calendar { position: fixed; z-index: 1000; width: 320px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; padding: 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 30px var(--shadow-dialog); }
+.date-calendar-header { display: flex; align-items: center; gap: 4px; }
+.date-calendar-header .subtle { min-width: 30px; height: 34px; padding: 4px; font-size: 18px; color: var(--text); }
+.date-calendar-header .calendar-period { flex: 1; font-size: 13px; font-weight: 600; }
+.date-weekdays, .date-day-grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 3px; }
+.date-weekdays { margin: 12px 0 6px; text-align: center; font-size: 11px; color: var(--muted); }
+.date-day-grid > .subtle { height: 34px; padding: 0; font-size: 12px; color: var(--text); border: 1px solid transparent; }
+.date-day-grid > .other-month { color: var(--muted); opacity: .6; }
+.date-calendar button[aria-pressed="true"] { background: var(--selection); color: var(--selection-text); border-color: var(--selection-edge); }
+.date-calendar button[aria-current="date"] { border-color: var(--accent); }
+.date-calendar button:hover:not(:disabled) { background: var(--secondary); }
+.date-calendar-footer { display: flex; justify-content: space-between; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
+.date-calendar-footer .subtle { font-size: 12px; }
+.calendar-year-label { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 12px 0; }
+.calendar-year-label > input { width: 100px; height: 36px; padding: 6px 8px; margin: 0; }
+.date-month-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; }
+.date-month-grid > .subtle { min-height: 38px; padding: 6px; color: var(--text); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.calendar-year-label input::-webkit-inner-spin-button, .calendar-year-label input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }

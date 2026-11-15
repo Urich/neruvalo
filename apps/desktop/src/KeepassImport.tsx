@@ -1,9 +1,11 @@
+import { SecretInput } from "./SecretInput";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "./i18n";
 import { errorText } from "./model";
 import { reportLabelKeys } from "./importMessages";
 
+type SelectedFile = { id: string; name: string };
 export type KeepassReport = {
   ticket: string; folder: string; entries: number; groups: number; attachments: number;
   archived: number; history_versions: number; can_confirm: boolean; dispatched: boolean;
@@ -16,7 +18,8 @@ export function KeepassImport({ profile, disabled, onChanged }: {
   const { t, language } = useI18n();
   const [folder, setFolder] = useState("KeePass");
   const [password, setPassword] = useState("");
-  const [keyfile, setKeyfile] = useState(false);
+  const [file, setFile] = useState<SelectedFile | null>(null);
+  const [keyfile, setKeyfile] = useState<SelectedFile | null>(null);
   const [report, setReport] = useState<KeepassReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -34,30 +37,47 @@ export function KeepassImport({ profile, disabled, onChanged }: {
     })();
     return () => { active = false; };
   }, [profile]);
-  async function run(fn: () => Promise<void>) {
+  async function run(fn: () => Promise<void>, clearPassword = false) {
     if (busy) return;
     setBusy(true); setError("");
     try { await fn(); } catch (e) { setError(errorText(e)); }
-    finally { setBusy(false); setPassword(""); }
+    finally { setBusy(false); if (clearPassword) setPassword(""); }
   }
   async function reset() {
     if (report && !report.completed) await call("keepass_cancel", { ticket: report.ticket });
-    setReport(null); setPassword("");
+    setReport(null); setPassword(""); setFile(null); setKeyfile(null);
+  }
+  async function pick(kind: "database" | "keyfile") {
+    await run(async () => {
+      const selected = await call<SelectedFile | null>("keepass_pick_file", { kind });
+      if (selected) (kind === "database" ? setFile : setKeyfile)(selected);
+    });
   }
   const unavailable = disabled || busy || loading;
   return <section className="import-card" aria-labelledby="keepass-title">
     <h2 id="keepass-title">{t("ui.keepassImport")}</h2>
     {loading ? <p>{t("ui.pleaseWait")}</p> : !report ? <form onSubmit={(e) => {
-      e.preventDefault(); void run(async () => {
-        const value = await call<KeepassReport | null>("keepass_prepare", { folder, password, use_keyfile: keyfile });
+      e.preventDefault();
+      if (unavailable || !file || !folder.trim() || (!password && !keyfile)) return;
+      void run(async () => {
+        const value = await call<KeepassReport | null>("keepass_prepare", { folder, password, file_id: file.id, keyfile_id: keyfile?.id ?? null });
         if (value) setReport(value);
-      });
+      }, true);
     }}>
       <p className="muted">{t("ui.keepassHelp")}</p>
+      <label>{t("ui.keepassDatabase")}<span className="file-picker-row">
+        <input readOnly value={file?.name ?? ""} placeholder={t("ui.noFileSelected")} aria-label={t("ui.keepassDatabase")} />
+        <button type="button" className="secondary" disabled={unavailable} onClick={() => void pick("database")}>{t("ui.chooseDatabase")}</button>
+      </span></label>
+      <label>{t("ui.optionalKeyfile")}<span className="file-picker-row">
+        <input readOnly value={keyfile?.name ?? ""} placeholder={t("ui.optionalKeyfile")} aria-label={t("ui.optionalKeyfile")} />
+        <button type="button" className="secondary" disabled={unavailable} onClick={() => void pick("keyfile")}>{t("ui.chooseKeyfile")}</button>
+        {keyfile && <button type="button" className="secondary" disabled={unavailable} onClick={() => setKeyfile(null)}>{t("ui.removeAttachment")}</button>}
+      </span></label>
       <label>{t("ui.keepassFolder")}<input value={folder} disabled={unavailable} required maxLength={256} onChange={(e) => setFolder(e.target.value)} /></label>
-      <label>{t("ui.keepassPassword")}<input type="password" value={password} autoComplete="off" disabled={unavailable} onChange={(e) => setPassword(e.target.value)} /></label>
-      <label className="import-keyfile"><input type="checkbox" checked={keyfile} disabled={unavailable} onChange={(e) => setKeyfile(e.target.checked)} />{t("ui.keepassKeyfile")}</label>
-      <button type="submit" className="primary" disabled={unavailable || !folder.trim() || (!password && !keyfile)}>{t(busy ? "ui.pleaseWait" : "ui.keepassPreview")}</button>
+      <label>{t("ui.keepassPassword")}<SecretInput  value={password} autoComplete="off" disabled={unavailable} onChange={(e) => setPassword(e.target.value)} /></label>
+
+      <button type="submit" className="primary" disabled={unavailable || !file || !folder.trim() || (!password && !keyfile)}>{t(busy ? "ui.pleaseWait" : "ui.startKeepassImport")}</button>
     </form> : <div className="import-summary">
       <h3>{t(report.completed ? "ui.reportCompleted" : !report.can_confirm ? "ui.reportBlocked" : "ui.reportPreview")}</h3>
       <p><bdi>{report.folder}</bdi></p>

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { Imports } from "./Imports";
 import { act } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -20,13 +21,14 @@ beforeEach(() => {
   setPreference("en"); changed.mockReset().mockResolvedValue(null);
   native.invoke.mockReset().mockImplementation(async (_command, {request}) => {
     if (request.action === "keepass_status" || request.action === "keepass_last_report") return null;
+    if (request.action === "keepass_pick_file") return { id: request.kind, name: request.kind === "database" ? "vault.kdbx" : "vault.key" };
     if (request.action === "keepass_prepare") return preview;
     return true;
   });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
-async function mount() { await act(async () => root.render(<KeepassImport profile="alice" disabled={false} onChanged={changed} />)); }
+async function mount() { await act(async () => root.render(<KeepassImport profile="alice" disabled={false} onChanged={changed} />)); if (host.querySelector("form")) await click("Choose database"); }
 async function click(text: string) { await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent === text)!.click()); }
 async function fillPassword(value: string) {
   await act(async () => {
@@ -38,7 +40,7 @@ async function fillPassword(value: string) {
 async function submit() { await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", {bubbles:true,cancelable:true}))); }
 it("previews before explicit confirmation, clears the source password and binds every call to the profile", async () => {
   await mount(); expect(host.querySelector("dialog")).toBeNull(); await fillPassword("source-password"); await submit();
-  expect(native.invoke).toHaveBeenCalledWith("command", {request: {action:"keepass_prepare",expected_profile:"alice",folder:"KeePass",password:"source-password",use_keyfile:false}});
+  expect(native.invoke).toHaveBeenCalledWith("command", {request: {action:"keepass_prepare",expected_profile:"alice",folder:"KeePass",password:"source-password",file_id:"database",keyfile_id:null}});
   expect(host.textContent).toContain("History versions excluded");
   expect(host.querySelector('input[type="password"]')).toBeNull();
   expect(native.invoke.mock.calls.some(([, args]) => args.request.action === "keepass_commit")).toBe(false);
@@ -51,12 +53,12 @@ it("previews before explicit confirmation, clears the source password and binds 
 it("allows keyfile-only opening and handles native selection cancellation", async () => {
   await mount();
   expect(host.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(true);
-  await act(async () => host.querySelector<HTMLInputElement>('[type="checkbox"]')!.click());
+  await click("Choose key file");
   expect(host.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(false);
   native.invoke.mockResolvedValueOnce(null); await submit();
   expect(host.querySelector('input[type="password"]')).not.toBeNull();
   expect(changed).not.toHaveBeenCalled();
-  expect(native.invoke.mock.calls.at(-1)![1].request.use_keyfile).toBe(true);
+  expect(native.invoke.mock.calls.at(-1)![1].request.keyfile_id).toBe("keyfile");
 });
 it("blocks confirmation for rejected attachments and cancels the prepared operation", async () => {
   native.invoke.mockImplementation(async () => ({...preview,can_confirm:false,issues:[{code:"attachment_limit",item:"<img src=x onerror=alert(1)>",blocking:true}]}));
@@ -109,6 +111,7 @@ it("keeps the report after a failed commit and reloads its durable dispatch stat
     if (request.action === "keepass_last_report") return null;
     if (request.action === "keepass_status") return failed ? {...preview,dispatched:true} : null;
     if (request.action === "keepass_prepare") return preview;
+    if (request.action === "keepass_pick_file") return {id:"database",name:"vault.kdbx"};
     if (request.action === "keepass_commit") { failed = true; throw Error("KEEPASS_IMPORT_UNCERTAIN"); }
     return true;
   });
@@ -116,4 +119,49 @@ it("keeps the report after a failed commit and reloads its durable dispatch stat
   await click("Confirm import");
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("without duplicates");
   expect(host.textContent).toContain("Retry same import"); expect(changed).not.toHaveBeenCalled();
+});
+
+it("offers KeePass preview and confirmation in an unlocked local vault", async () => {
+  await act(async () => root.render(<Imports status={{unlocked:true,local:true,online:false,profile:"local-test"}} profiles={[]} source="" busy={false} onSource={() => {}} onChanged={changed} />));
+  await click("Choose database");
+  await fillPassword("source-password"); await submit();
+  await click("Confirm import");
+  expect(native.invoke).toHaveBeenCalledWith("command", {request:{action:"keepass_commit",expected_profile:"local-test",ticket:"ticket"}});
+  expect(changed).toHaveBeenCalledOnce();
+  expect(native.invoke.mock.calls.every(([,args]) => args.request.expected_profile === "local-test")).toBe(true);
+});
+it("keeps server offline caches and locked vaults read-only", async () => {
+  for (const unlocked of [false, true]) {
+    await act(async () => root.render(<Imports status={{unlocked,local:false,online:false,profile:"server-cache"}} profiles={[]} source="" busy={false} onSource={() => {}} onChanged={changed} />));
+    expect(host.textContent).toContain("Open a local vault or sign in");
+    expect(host.querySelector('input[type="password"]')).toBeNull();
+  }
+  expect(native.invoke).not.toHaveBeenCalled();
+});
+
+it("shows chosen names, preserves the password on selection and waits for Start import", async () => {
+  await mount();
+  await fillPassword("source-password");
+  await click("Choose key file");
+  expect(host.querySelector<HTMLInputElement>('[aria-label="KeePass database"]')!.value).toBe("vault.kdbx");
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Optional key file"]')!.value).toBe("vault.key");
+  expect(host.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("source-password");
+  expect(native.invoke.mock.calls.some(([, args]) => args.request.action === "keepass_prepare")).toBe(false);
+  native.invoke.mockResolvedValueOnce(null);
+  await click("Choose database");
+  expect(host.querySelector<HTMLInputElement>('[aria-label="KeePass database"]')!.value).toBe("vault.kdbx");
+  await click("Start import");
+  expect(native.invoke).toHaveBeenCalledWith("command", {request:{action:"keepass_prepare",expected_profile:"alice",folder:"KeePass",password:"source-password",file_id:"database",keyfile_id:"keyfile"}});
+});
+it("allows choosing a key file first and requires a database before starting", async () => {
+  await act(async () => root.render(<KeepassImport profile="alice" disabled={false} onChanged={changed} />));
+  await click("Choose key file");
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Optional key file"]')!.value).toBe("vault.key");
+  expect(host.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(true);
+  await click("Choose database");
+  expect(host.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(false);
+  await click("Remove");
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Optional key file"]')!.value).toBe("");
+  expect(host.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(true);
+  expect(native.invoke.mock.calls.some(([, args]) => args.request.action === "keepass_prepare")).toBe(false);
 });

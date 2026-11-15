@@ -1,11 +1,13 @@
+import { SecretInput } from "./SecretInput";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "./i18n";
 import { errorText, Profile } from "./model";
 
 type Action = "connect" | "create_local" | "restore_local_backup" | "export_local_backup" | "import_local";
-export function LocalVaultTools({ status, profiles, source, onSource, onChanged, onConnect, busy: parentBusy = false, toolbar = false, importsOnly = false, restoreOnly = false }: {
+export function LocalVaultTools({ status, profiles, source, onSource, onChanged, onConnect, onUnsupportedVault, busy: parentBusy = false, toolbar = false, importsOnly = false, restoreOnly = false }: {
   status: { unlocked: boolean; local?: boolean; online?: boolean; profile?: string };
+  onUnsupportedVault?: (error: unknown) => Promise<boolean>;
   busy?: boolean;
   toolbar?: boolean;
   importsOnly?: boolean;
@@ -56,7 +58,13 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
       setAction(null); setPassword(""); setConfirmation("");
       if (action === "import_local") onSource("");
       if (action !== "import_local") setNotice(action === "export_local_backup" ? "ui.backupSaved" : "ui.localVaultReady");
-    } catch (e) { setError(errorText(e)); }
+    } catch (e) {
+      if (onUnsupportedVault && await onUnsupportedVault(e)) {
+        setAction(null); setPassword(""); setConfirmation("");
+        return;
+      }
+      setError(errorText(e));
+    }
     finally { setBusy(false); }
   }
   const hint = busy ? "ui.pleaseWait" : action === "create_local" && !name.trim() ? "ui.nameRequired" : action === "create_local" && password.length < 12 ? "ui.passwordMinimum" : action === "create_local" && password !== confirmation ? "ui.passwordMismatch" : action !== "connect" && !password ? "ui.localMasterPassword" : action === "import_local" && !source ? "ui.localVault" : "";
@@ -82,9 +90,9 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
         {action === "import_local" && <label>{t("ui.localVault")}<select value={source} disabled={busy} onChange={(e) => onSource(e.target.value)} required>
           {localProfiles.map((p) => <option key={p.id} value={p.id}>{p.login}</option>)}
         </select></label>}
-        {action !== "connect" && <label>{t("ui.localMasterPassword")}<input type="password" value={password} autoComplete={action === "create_local" ? "new-password" : "current-password"}
+        {action !== "connect" && <label>{t("ui.localMasterPassword")}<SecretInput  value={password} autoComplete={action === "create_local" ? "new-password" : "current-password"}
           minLength={action === "create_local" ? 12 : undefined} required onChange={(e) => setPassword(e.target.value)} disabled={busy} /></label>}
-        {action === "create_local" && <label>{t("ui.confirmMasterPassword")}<input type="password" value={confirmation} autoComplete="new-password"
+        {action === "create_local" && <label>{t("ui.confirmMasterPassword")}<SecretInput  value={confirmation} autoComplete="new-password"
           required onChange={(e) => setConfirmation(e.target.value)} disabled={busy} /></label>}
         {error && <p role="alert">{t(error)}</p>}
         {hint && <p role="status" id="local-vault-hint">{t(hint)}</p>}

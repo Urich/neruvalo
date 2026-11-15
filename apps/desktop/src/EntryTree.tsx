@@ -1,6 +1,6 @@
 import { EntryIcon } from "./RecordIcon";
 import { useEffect, useRef, useState } from "react";
-import { Entry, types } from "./model";
+import { Entry, types, passwordExpired } from "./model";
 import { Group, TreeNode } from "./groups";
 import { Icon } from "./Icon";
 import { useI18n } from "./i18n";
@@ -12,6 +12,11 @@ export function EntryTree({
   onGroup,
   searching,
   reveal,
+  resetKey = "",
+  loading = false,
+  loadKey = 0,
+  loadFailed = false,
+  onVisibleEntries,
 }: {
   nodes: TreeNode[];
   selected?: string;
@@ -20,9 +25,16 @@ export function EntryTree({
   onGroup: (group: Group) => void;
   searching: boolean;
   reveal: number;
+  resetKey?: string;
+  loading?: boolean;
+  loadKey?: number;
+  loadFailed?: boolean;
+  onVisibleEntries?: (entries: Entry[]) => void;
 }) {
   const { t } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
+  const [limit, setLimit] = useState(50);
+  useEffect(() => { setLimit(50); if (ref.current) ref.current.scrollTop = 0; }, [resetKey]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   useEffect(() => {
     const find = (list: TreeNode[], path: string[]): string[] | null => {
@@ -49,8 +61,31 @@ export function EntryTree({
       else next.delete(id);
       return next;
     });
+  // Render the selected entry and its ancestors even beyond the current page limit.
+  const selectionPath = new Set<string>();
+  const findSelection = (list: TreeNode[], path: string[]): boolean => list.some(node => {
+    const next = [...path,node.key];
+    if (node.key === selected) { next.forEach(key => selectionPath.add(key)); return true; }
+    return findSelection(node.children,next);
+  });
+  if (selected) findSelection(nodes,[]);
+  const scrolledSelection = useRef("");
+  useEffect(() => {
+    if (!selected) { scrolledSelection.current = ""; return; }
+    const key = `${selected}:${reveal}`;
+    if (scrolledSelection.current === key) return;
+    const row = [...(ref.current?.querySelectorAll<HTMLElement>("[data-record-id]") ?? [])].find(element => element.dataset.recordId === selected);
+    if (row) { row.scrollIntoView?.({block:"nearest"}); scrolledSelection.current=key; }
+  },[selected,reveal,nodes,collapsed]);
+  let rendered = 0;
+  const visibleSummaries: Entry[] = [];
+  const countVisible = (list: TreeNode[]): number => list.reduce((count,node) => count + 1 + (node.group && (searching || !collapsed.has(node.key)) ? countVisible(node.children) : 0), 0);
+  const hasMore = countVisible(nodes) > limit;
   const render = (list: TreeNode[], level: number) =>
     list.map((node) => {
+      if (rendered >= limit && !selectionPath.has(node.key)) return null;
+      rendered++;
+      if (node.entry?.summary && !node.entry.row_loaded) visibleSummaries.push(node.entry);
       const expanded = searching || !collapsed.has(node.key),
         selectedNode = node.group
           ? activeGroup === node.key && !selected
@@ -143,11 +178,12 @@ export function EntryTree({
               }
             >
               <span className="record-icon">
-                <EntryIcon data={node.entry?.data} name={node.group ? "folder" : node.entry!.data.record_type} />
+                <EntryIcon data={node.entry?.data ?? node.group ?? undefined} name={node.group ? "folder" : node.entry!.data.record_type} />
               </span>
               <span>
                 <strong>
                   <bdi>{node.group?.title ?? node.entry!.data.title}</bdi>
+                  {node.entry && passwordExpired(node.entry.data) && <span className="expired-indicator" role="img" aria-label={t("ui.passwordExpired")} title={t("ui.passwordExpired")}><Icon name="expired" /></span>}
                   {!!node.entry?.share_count && (
                     <span
                       className="shared-indicator"
@@ -175,9 +211,20 @@ export function EntryTree({
         </div>
       );
     });
+  const content = render(nodes, 1);
+  const visibleKey = visibleSummaries.map(entry => `${entry.record_id}:${entry.version_id}`).join(",");
+  useEffect(() => { if (visibleSummaries.length) onVisibleEntries?.(visibleSummaries); }, [visibleKey, loadKey]);
+  useEffect(() => {
+    const element = ref.current;
+    if (hasMore && element && element.clientHeight > 0 && element.scrollHeight <= element.clientHeight) setLimit(value => value + 50);
+  }, [limit, resetKey, nodes, collapsed]);
   return (
-    <div role="tree" aria-label={t("ui.entries")} className="entry-tree" ref={ref}>
-      {render(nodes, 1)}
+    <div role="tree" aria-label={t("ui.entries")} aria-busy={loading} className="entry-tree" ref={ref}
+      onScroll={event => { const element = event.currentTarget; if (hasMore && element.scrollHeight-element.scrollTop-element.clientHeight < 160) setLimit(value => value + 50); }}>
+      {content}
+      {loading && <div role="status" className="records-loading"><span className="loading-spinner" aria-hidden="true" />{t("ui.loadingRecords")}</div>}
+      {loadFailed && <button type="button" className="secondary full" onClick={() => onVisibleEntries?.(visibleSummaries)}>{t("ui.retryLoadingRecords")}</button>}
+      {hasMore && <button type="button" className="secondary full" disabled={loading} onClick={() => setLimit(value => value + 50)}>{t("ui.loadMoreRecords")}</button>}
     </div>
   );
 }

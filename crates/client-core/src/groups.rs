@@ -8,10 +8,12 @@ pub struct GroupView {
     pub legacy_path: Option<String>,
     pub revision: i64,
     pub archived: bool,
+    pub icon: Option<String>,
+    pub keepass_icon_id: Option<u64>,
 }
 impl Client {
     pub async fn groups(&mut self) -> Result<Vec<GroupView>> {
-        self.objects()
+        self.index_objects()
             .await?
             .into_iter()
             .filter(|v| v.data.record_type == "group")
@@ -34,6 +36,13 @@ impl Client {
                         .map(str::to_owned),
                     revision: v.revision,
                     archived: v.archived,
+                    icon: v
+                        .data
+                        .extra
+                        .get("icon")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    keepass_icon_id: v.data.extra.get("keepass_icon_id").and_then(Value::as_u64),
                 })
             })
             .collect()
@@ -321,10 +330,9 @@ impl Client {
             if archived {
                 data.extra.insert("archived_at".into(), now);
             }
-            let raw = Zeroizing::new(serde_json::to_vec(&data)?);
-            let payload = crypto::encrypt_version(
+            let payload = attachments::encrypt_record(
                 &a.keys,
-                &raw,
+                &data,
                 &version_context(
                     &a.profile.server_id,
                     &a.profile.account_id,
@@ -338,7 +346,7 @@ impl Client {
                 expected_revision: r.revision,
                 version_id,
                 previous_version: Some(r.version_id.clone()),
-                payload: serde_json::to_value(payload)?,
+                payload,
                 signature: String::new(),
                 archived,
             };

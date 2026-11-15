@@ -3,22 +3,24 @@ import { Profile } from "./model";
 import { KeepassImport } from "./KeepassImport";
 import { LocalVaultTools } from "./LocalVaultTools";
 
-export function Imports({ status, profiles, source, busy, onSource, onChanged }: {
+export function Imports({ status, profiles, source, busy, onSource, onChanged, onUnsupportedVault }: {
   status: { unlocked: boolean; online?: boolean; local?: boolean; profile?: string };
+  onUnsupportedVault?: (error: unknown) => Promise<boolean>;
   profiles: Profile[]; source: string; busy: boolean;
   onSource: (id: string) => void; onChanged: () => Promise<void>;
 }) {
   const { t } = useI18n();
   const online = status.unlocked && status.online && !status.local && status.profile;
+  const writable = status.unlocked && (status.local || status.online) && status.profile;
   return <div className="imports-page">
     <h1>{t("ui.imports")}</h1>
-    {online ? <KeepassImport key={status.profile} profile={status.profile!} disabled={busy} onChanged={onChanged} /> :
-      <section className="import-card"><h2>{t("ui.keepassImport")}</h2><p className="muted">{t("ui.importOnlineRequired")}</p></section>}
+    {writable ? <KeepassImport key={status.profile} profile={status.profile!} disabled={busy} onChanged={onChanged} /> :
+      <section className="import-card"><h2>{t("ui.keepassImport")}</h2><p className="muted">{t("ui.keepassVaultRequired")}</p></section>}
     <section className="import-card">
       <h2>{t("ui.importLocalVault")}</h2>
       <p className="muted">{t("ui.importLocalDescription")}</p>
       <LocalVaultTools status={status} profiles={profiles} source={source} busy={busy} importsOnly
-        onSource={onSource} onChanged={onChanged} onConnect={async () => {}} />
+        onUnsupportedVault={onUnsupportedVault} onSource={onSource} onChanged={onChanged} onConnect={async () => {}} />
       {!online && <p className="muted">{t("ui.importOnlineRequired")}</p>}
     </section>
     <section className="import-card">
@@ -26,7 +28,7 @@ export function Imports({ status, profiles, source, busy, onSource, onChanged }:
       <p className="muted">{t("ui.importBackupDescription")}</p>
       {status.unlocked ? <p className="muted">{t("ui.importLockFirst")}</p> :
         <LocalVaultTools status={status} profiles={profiles} source="" busy={busy} restoreOnly
-          onSource={onSource} onChanged={onChanged} onConnect={async () => {}} />}
+          onUnsupportedVault={onUnsupportedVault} onSource={onSource} onChanged={onChanged} onConnect={async () => {}} />}
     </section>
   </div>;
 }

@@ -27,3 +27,12 @@ neruvalo-crypto = { path = "crates/crypto" }
 neruvalo-protocol = { path = "crates/protocol" }
 neruvalo-client = { path = "crates/client-core" }
 neruvalo-server = { path = "crates/server" }
+
+# Keep interactive development builds responsive without changing KDF parameters
+# or signature verification. Crypto dependencies are otherwise built unoptimized.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.dev.package.curve25519-dalek]
+opt-level = 3

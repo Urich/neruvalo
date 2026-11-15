@@ -17,8 +17,10 @@ use std::{
 };
 use uuid::Uuid;
 use zeroize::Zeroizing;
+const LATEST_RECORDS_SQL: &str = "SELECT v.id,v.body FROM versions v JOIN (SELECT record_id,MAX(revision) AS revision FROM versions GROUP BY record_id) latest ON latest.record_id=v.record_id AND latest.revision=v.revision ORDER BY v.record_id";
 mod attachments;
 mod groups;
+pub mod totp;
 pub use attachments::{Attachment, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_ATTACHMENT_BYTES};
 mod keepass_import;
 mod local;
@@ -122,6 +124,9 @@ impl RecordData {
             }
         }
         attachments::validate(self)?;
+        if let Some(value) = self.fields.get("totp").filter(|v| !v.is_empty()) {
+            totp::TotpConfig::parse(value)?.generator()?;
+        }
         ensure!(
             self.schema_version >= 2 || !self.extra.contains_key("attachments"),
             "UNSUPPORTED_FORMAT"
@@ -158,6 +163,8 @@ struct Unlocked {
     cache: AnyPool,
     online: bool,
     needs_sync: bool,
+    index_cache: BTreeMap<String, (String, ViewRecord)>,
+    attachment_handles: attachments::Handles,
 }
 pub struct Client {
     dir: PathBuf,
@@ -174,7 +181,7 @@ pub trait VerificationView: Send + Sync {
     fn is_closed(&self) -> bool;
 }
 pub type VerificationOpener = Box<dyn Fn(&str) -> Result<Box<dyn VerificationView>> + Send + Sync>;
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ViewRecord {
     pub record_id: String,
     pub version_id: String,
@@ -327,6 +334,53 @@ pub fn sqlite_database_url(path: &Path) -> Result<String> {
     Ok(format!("sqlite:{encoded}?mode=rwc"))
 }
 
+/// Vault incompatibility must end the active session, unlike import-file errors.
+pub fn is_unsupported_vault_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    [
+        "UNSUPPORTED_VAULT_FORMAT",
+        "UNSUPPORTED_LOCAL_SCHEMA",
+        "UNSUPPORTED_PROTOCOL",
+        "UNSUPPORTED_FORMAT",
+        "UNSUPPORTED_TYPE",
+        "UNSUPPORTED_ATTACHMENT_FORMAT",
+        "unsupported envelope",
+    ]
+    .iter()
+    .any(|code| message.contains(code))
+}
+
+// Check history headers too, but decrypt only current record metadata. The index
+// cache is reused by the first list request; file envelopes are never opened.
+fn validate_versions(a: &mut Unlocked, versions: &[StoredVersion]) -> Result<()> {
+    let mut latest = BTreeMap::<&str, &StoredVersion>::new();
+    for version in versions {
+        attachments::validate_payload_format(&version.payload, false)?;
+        if latest
+            .get(version.record_id.as_str())
+            .is_none_or(|old| old.revision < version.revision)
+        {
+            latest.insert(&version.record_id, version);
+        }
+    }
+    for version in latest.values() {
+        index_view(a, &version.version_id, &serde_json::to_string(version)?)?;
+    }
+    Ok(())
+}
+async fn validate_cached_vault(a: &mut Unlocked) -> Result<()> {
+    let rows = sqlx::query("SELECT body FROM versions")
+        .fetch_all(&a.cache)
+        .await?;
+    let versions = rows
+        .iter()
+        .map(|row| serde_json::from_str::<StoredVersion>(&row.get::<String, _>("body")))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    validate_versions(a, &versions)?;
+    sharing::validate_cached_formats(a).await?;
+    Ok(())
+}
+
 async fn cache(dir: &Path, id: &str) -> Result<AnyPool> {
     sqlx::any::install_default_drivers();
     let folder = dir.join(id);
@@ -341,7 +395,9 @@ async fn cache(dir: &Path, id: &str) -> Result<AnyPool> {
         .max_connections(1)
         .connect(&sqlite_database_url(&db)?)
         .await?;
-    sqlx::raw_sql("CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY,record_id TEXT NOT NULL,revision BIGINT NOT NULL,body TEXT NOT NULL);").execute(&pool).await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        .execute(&pool)
+        .await?;
     if let Some(row) = sqlx::query("SELECT value FROM meta WHERE name='schema_version'")
         .fetch_optional(&pool)
         .await?
@@ -355,6 +411,7 @@ async fn cache(dir: &Path, id: &str) -> Result<AnyPool> {
             .execute(&pool)
             .await?;
     }
+    sqlx::raw_sql("CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY,record_id TEXT NOT NULL,revision BIGINT NOT NULL,body TEXT NOT NULL); CREATE INDEX IF NOT EXISTS versions_latest ON versions(record_id,revision DESC);").execute(&pool).await?;
     Ok(pool)
 }
 async fn set_meta(pool: &AnyPool, name: &str, value: &str) -> Result<()> {
@@ -784,8 +841,13 @@ impl Client {
             cache: db,
             online: true,
             needs_sync: false,
+            index_cache: BTreeMap::new(),
+            attachment_handles: attachments::Handles::default(),
         });
-        self.sync().await?;
+        if let Err(error) = self.sync().await {
+            self.lock();
+            return Err(error);
+        }
         Ok(self.status())
     }
     pub async fn unlock_offline(&mut self, id: &str, password: Zeroizing<String>) -> Result<Value> {
@@ -810,7 +872,7 @@ impl Client {
         )?;
         let keys: AccountKeys = serde_json::from_slice(&raw)?;
         let db = cache(&self.dir, id).await?;
-        self.active = Some(Unlocked {
+        let mut unlocked = Unlocked {
             profile: p,
             keys,
             _root: root,
@@ -819,10 +881,22 @@ impl Client {
             cache: db,
             online: false,
             needs_sync: false,
-        });
+            index_cache: BTreeMap::new(),
+            attachment_handles: attachments::Handles::default(),
+        };
+        // Publish the candidate only after compatibility checks, so failure stays locked.
+        validate_cached_vault(&mut unlocked).await?;
+        self.active = Some(unlocked);
         Ok(self.status())
     }
     pub async fn sync(&mut self) -> Result<Value> {
+        let result = self.sync_inner().await;
+        if result.as_ref().is_err_and(is_unsupported_vault_error) {
+            self.lock();
+        }
+        result
+    }
+    async fn sync_inner(&mut self) -> Result<Value> {
         let http = self.http.clone();
         let a = self.unlocked()?;
         ensure!(!a.token.is_empty(), "ONLINE_LOGIN_REQUIRED");
@@ -900,6 +974,7 @@ impl Client {
         for v in &versions {
             verify_version(&a.profile, v)?;
         }
+        validate_versions(a, &versions)?;
         let share_guard = sharing::verify_snapshot(a, &snapshot["sharing"]).await?;
         let mut tx = a.cache.begin().await?;
         sqlx::query("INSERT INTO meta(name,value) VALUES('share_guard',$1) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(&share_guard)?).execute(&mut *tx).await?;
@@ -932,9 +1007,85 @@ impl Client {
             .filter(|r| r.data.record_type != "group")
             .collect())
     }
+    /// Index fields support global search and archive counts without sending secret
+    /// values, attachments or custom image payloads to the list UI.
+    pub async fn list_summaries(&mut self) -> Result<Vec<ViewRecord>> {
+        Ok(self
+            .index_objects()
+            .await?
+            .into_iter()
+            .filter(|record| record.data.record_type != "group")
+            .map(|mut record| {
+                record.data.extra.remove("icon");
+                record
+            })
+            .collect())
+    }
+    // Cache only the derived index, never secret values or record attachments.
+    // A fingerprint covers the complete stored body: even a modified payload
+    // with an unchanged version ID must pass signature verification again.
+    async fn index_objects(&mut self) -> Result<Vec<ViewRecord>> {
+        let a = self.unlocked()?;
+        let rows = sqlx::query(LATEST_RECORDS_SQL).fetch_all(&a.cache).await?;
+        let mut records = Vec::with_capacity(rows.len());
+        let mut retained = std::collections::BTreeSet::new();
+        for row in rows {
+            let body: String = row.get("body");
+            let id: String = row.get("id");
+            retained.insert(id.clone());
+            records.push(index_view(a, &id, &body)?);
+        }
+        a.index_cache.retain(|id, _| retained.contains(id));
+        Ok(records)
+    }
+    /// Visible rows need only metadata and their icon, never attachments or secrets.
+    pub async fn list_rows(&mut self, ids: &[String]) -> Result<Vec<ViewRecord>> {
+        ensure!(ids.len() <= 50, "PAGE_TOO_LARGE");
+        let a = self.unlocked()?;
+        let mut records = Vec::new();
+        for id in ids {
+            if let Some(row) = sqlx::query(
+                "SELECT id,body FROM versions WHERE record_id=$1 ORDER BY revision DESC LIMIT 1",
+            )
+            .bind(id)
+            .fetch_optional(&a.cache)
+            .await?
+            {
+                let version_id: String = row.get("id");
+                let body: String = row.get("body");
+                let record = index_view(a, &version_id, &body)?;
+                if record.data.record_type != "group" {
+                    records.push(record);
+                }
+            }
+        }
+        Ok(records)
+    }
+    /// Fetch only the latest payloads needed by the visible portion of the list.
+    pub async fn list_records(&mut self, ids: &[String]) -> Result<Vec<ViewRecord>> {
+        ensure!(ids.len() <= 50, "PAGE_TOO_LARGE");
+        let a = self.unlocked()?;
+        let mut records = Vec::new();
+        for id in ids {
+            let row = sqlx::query(
+                "SELECT body FROM versions WHERE record_id=$1 ORDER BY revision DESC LIMIT 1",
+            )
+            .bind(id)
+            .fetch_optional(&a.cache)
+            .await?;
+            if let Some(row) = row {
+                let version: StoredVersion = serde_json::from_str(&row.get::<String, _>("body"))?;
+                let record = view(a, &version)?;
+                if record.data.record_type != "group" {
+                    records.push(record);
+                }
+            }
+        }
+        Ok(records)
+    }
     async fn objects(&mut self) -> Result<Vec<ViewRecord>> {
         let a = self.unlocked()?;
-        let rows=sqlx::query("SELECT v.body FROM versions v WHERE v.revision=(SELECT MAX(v2.revision) FROM versions v2 WHERE v2.record_id=v.record_id) ORDER BY v.record_id").fetch_all(&a.cache).await?;
+        let rows = sqlx::query(LATEST_RECORDS_SQL).fetch_all(&a.cache).await?;
         rows.into_iter()
             .map(|r| {
                 let v: StoredVersion = serde_json::from_str(&r.get::<String, _>("body"))?;
@@ -982,7 +1133,7 @@ impl Client {
             || !data.folder.is_empty()
         {
             Some(
-                self.objects()
+                self.index_objects()
                     .await?
                     .into_iter()
                     .map(|r| (r.record_id, r.revision))
@@ -1039,10 +1190,9 @@ impl Client {
             .or(creation_id)
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let version = Uuid::new_v4().to_string();
-        let raw = Zeroizing::new(serde_json::to_vec(&data)?);
-        let payload = crypto::encrypt_version(
+        let payload = attachments::encrypt_record(
             &a.keys,
-            &raw,
+            &data,
             &version_context(&a.profile.server_id, &a.profile.account_id, &id, &version),
         )?;
         let mut r = SaveRecord {
@@ -1051,7 +1201,7 @@ impl Client {
             expected_revision,
             version_id: version,
             previous_version: previous,
-            payload: serde_json::to_value(payload)?,
+            payload,
             signature: String::new(),
             archived,
         };
@@ -1274,12 +1424,43 @@ fn verify_version(p: &Profile, v: &StoredVersion) -> Result<()> {
         &v.signature,
     )
 }
+fn index_view(a: &mut Unlocked, id: &str, body: &str) -> Result<ViewRecord> {
+    let fingerprint = crypto::digest(body);
+    if let Some((previous, record)) = a.index_cache.get(id) {
+        if previous == &fingerprint {
+            return Ok(record.clone());
+        }
+    }
+    let version: StoredVersion = serde_json::from_str(body)?;
+    let mut record = view(a, &version)?;
+    record.data.notes.clear();
+    record.data.extra.retain(|key, _| {
+        [
+            "group_id",
+            "parent_group_id",
+            "legacy_path",
+            "created_at",
+            "modified_at",
+            "archived_at",
+            "keepass_icon_id",
+            "icon",
+        ]
+        .contains(&key.as_str())
+    });
+    for (key, value) in &mut record.data.fields {
+        if !["expires", "never_expires"].contains(&key.as_str()) && !value.is_empty() {
+            *value = "••••".into();
+        }
+    }
+    a.index_cache
+        .insert(id.to_owned(), (fingerprint, record.clone()));
+    Ok(record)
+}
 fn view(a: &Unlocked, v: &StoredVersion) -> Result<ViewRecord> {
     verify_version(&a.profile, v)?;
-    let payload: EncryptedVersion = serde_json::from_value(v.payload.clone())?;
-    let clear = crypto::decrypt_version(
+    let data = attachments::decrypt_record(
         &a.keys,
-        &payload,
+        &v.payload,
         &version_context(
             &a.profile.server_id,
             &a.profile.account_id,
@@ -1287,8 +1468,6 @@ fn view(a: &Unlocked, v: &StoredVersion) -> Result<ViewRecord> {
             &v.version_id,
         ),
     )?;
-    let data: RecordData = serde_json::from_slice(&clear)?;
-    data.validate()?;
     Ok(ViewRecord {
         record_id: v.record_id.clone(),
         version_id: v.version_id.clone(),
@@ -1297,3 +1476,112 @@ fn view(a: &Unlocked, v: &StoredVersion) -> Result<ViewRecord> {
         data,
     })
 }
+
+#[cfg(test)]
+mod lazy_record_tests {
+    use super::*;
+    #[tokio::test]
+    async fn summaries_exclude_payloads_and_batches_return_latest_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Client::new(dir.path().into()).unwrap();
+        client
+            .create_local("Lazy records", Zeroizing::new("local test password".into()))
+            .await
+            .unwrap();
+        client.create_group("Group".into(), None).await.unwrap();
+        let record = |password: &str| RecordData {
+            record_type: "login".into(),
+            schema_version: 1,
+            title: "Entry".into(),
+            fields: BTreeMap::from([
+                ("password".into(), password.into()),
+                ("expires".into(), "2030-01-01T00:00:00Z".into()),
+            ]),
+            notes: "Private note".into(),
+            folder: String::new(),
+            tags: vec![],
+            extra: BTreeMap::from([
+                ("icon".into(), json!("private image")),
+                (
+                    "keepass_references".into(),
+                    json!({"Password":"private source"}),
+                ),
+            ]),
+        };
+        let saved = client
+            .save(None, 0, record("old password"), false)
+            .await
+            .unwrap();
+        let id = saved["record_id"].as_str().unwrap().to_owned();
+        client
+            .save(Some(id.clone()), 1, record("current password"), false)
+            .await
+            .unwrap();
+        let summaries = client.list_summaries().await.unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].revision, 2);
+        assert!(summaries[0].data.notes.is_empty());
+        assert_eq!(summaries[0].data.fields["expires"], "2030-01-01T00:00:00Z");
+        let serialized = serde_json::to_string(&summaries).unwrap();
+        assert!(
+            !serialized.contains("current password")
+                && !serialized.contains("private image")
+                && !serialized.contains("private source")
+        );
+        let rows = client.list_rows(&[id.clone()]).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_ne!(rows[0].data.fields["password"], "current password");
+        assert!(rows[0].data.notes.is_empty());
+        assert_eq!(rows[0].data.extra["icon"], "private image");
+        let records = client.list_records(&[id]).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].data.fields["password"], "current password");
+        assert_eq!(records[0].data.notes, "Private note");
+        assert!(client
+            .list_records(&vec!["invalid".into(); 51])
+            .await
+            .is_err());
+        assert!(client.list_records(&[]).await.unwrap().is_empty());
+        let a = client.unlocked().unwrap();
+        assert!(sqlx::query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='versions_latest'"
+        )
+        .fetch_optional(&a.cache)
+        .await
+        .unwrap()
+        .is_some());
+        assert_eq!(a.index_cache.len(), 2);
+        let row = sqlx::query(
+            "SELECT id,body FROM versions WHERE record_id=$1 ORDER BY revision DESC LIMIT 1",
+        )
+        .bind(&summaries[0].record_id)
+        .fetch_one(&a.cache)
+        .await
+        .unwrap();
+        let version_id: String = row.get("id");
+        let original: String = row.get("body");
+        let mut tampered: Value = serde_json::from_str(&original).unwrap();
+        tampered["signature"] = json!("tampered");
+        sqlx::query("UPDATE versions SET body=$1 WHERE id=$2")
+            .bind(tampered.to_string())
+            .bind(&version_id)
+            .execute(&a.cache)
+            .await
+            .unwrap();
+        assert!(client.list_summaries().await.is_err());
+        let a = client.unlocked().unwrap();
+        sqlx::query("UPDATE versions SET body=$1 WHERE id=$2")
+            .bind(&original)
+            .bind(&version_id)
+            .execute(&a.cache)
+            .await
+            .unwrap();
+        assert_eq!(client.list_summaries().await.unwrap().len(), 1);
+        client.lock();
+        assert!(client.list_summaries().await.is_err());
+        assert!(client.list_records(&[]).await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod vault_format_tests;

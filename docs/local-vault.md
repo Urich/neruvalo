@@ -15,8 +15,8 @@ read-only. Sharing and synchronization require a server profile.
 Profiles have an explicit `kind` (`local` or `server`); older profiles default to
 `server`. Local vaults use independent random root and account keys. The root is
 wrapped with a password key derived using the existing Argon2id configuration.
-Version payloads use the existing encrypted and signed version format and are
-stored in SQLite. A local write is a transaction, including an entire subtree
+Version payloads use the signed format with separate encrypted file blocks described
+below and are stored in SQLite. A local write is a transaction, including an entire subtree
 archive operation. No master password or record contents are stored in plaintext.
 The profile name and structural metadata such as opaque IDs, revisions and
 timestamps are not secret.
@@ -66,5 +66,93 @@ remain untouched and available, including after any failure. This retained sourc
 is an independent copy, not an additional continuously synchronized profile.
 
 Both desktop and server must include the import endpoint. A server upgrade is
-needed to import into an older installation. Existing server profiles and their
-offline mode do not require conversion.
+needed to import into an older installation. This file-block payload format requires updated clients and fresh test vaults;
+old record payloads are rejected rather than migrated.
+
+
+## Separate encrypted file blocks (payload 3, 15 November 2026)
+
+This is a breaking change for both local and server vaults. Recreate test vaults
+and use updated clients for owners and recipients. No database is deleted by the
+application, and no automatic migration or legacy attachment decoder is provided.
+The server API/database schema remains 2 because it stores and signs opaque
+payloads; the inner version payload is now explicitly versioned as 3.
+
+Opening a local vault or an offline server cache first checks the local schema,
+all stored version payload/envelope headers, current record metadata and cached
+shared copies. Current metadata warms the existing index cache rather than being
+decrypted again for the first list. A local candidate session becomes active only
+after these checks. Server login must complete a compatible sync; failed login
+never leaves an unlocked session. Sync checks incoming version formats before
+committing the snapshot. Unsupported vault formats end the native session and
+return the desktop to Unlock vault with a localized error. Files remain encrypted
+throughout this validation. Historical content is validated when read; discovering
+an unsupported format later uses the same lock/error behavior. Import-file errors
+such as unsupported KDBX versions remain separate. Existing databases are not
+deleted, rewritten to a supported format or migrated by this gate.
+
+
+Each file is encrypted immediately when picked or imported, using a fresh random
+32-byte key and the existing XChaCha20-Poly1305 envelope implementation (random
+24-byte nonce). Its authenticated additional data is the compact UTF-8 JSON array
+`["neruvalo/file/v1", attachment_id, filename, plaintext_byte_length]`. Base64
+strings use the existing URL-safe alphabet without padding. File names are single
+safe path components, never destination paths. Empty files are supported.
+
+The signed version's payload is:
+
+```json
+{
+  "format_version": 3,
+  "record": {"data": "existing Envelope", "owner_key": "existing Envelope"},
+  "files": {"attachment UUID": "file Envelope"},
+  "sharing": "existing optional sharing transaction metadata"
+}
+```
+
+`record` is the existing encrypted version container and uses its existing
+version-specific context and owner-key wrapping. Its encrypted JSON contains the
+record fields and attachment descriptors `{id,name,size,data}`. Each descriptor's
+internal `data` is a JSON string `{format_version:1,key:<base64url file key>}`.
+File bytes are absent from this encrypted metadata. The independent envelopes
+live in the outer `files` map. Descriptors and blocks must match exactly: missing,
+duplicate or unused blocks are rejected. The complete outer payload is covered by
+the existing version signature, checked before metadata decryption. Thus the
+server learns opaque file IDs, block count and approximate lengths, but receives
+neither file names, file keys nor plaintext bytes.
+
+Reading, indexing, editing, moving and archiving a record decrypt only its record
+container; they never open file envelopes. Saving another record version reuses
+unchanged file envelopes and keys, without re-encrypting file bytes. History keeps
+its own referenced blocks. Local backup/restore and transfer to another account
+preserve the file envelopes while rewrapping/re-encrypting record metadata. This
+is a separation of encryption blocks, not a streaming object store: ciphertexts
+still travel inside each signed version in the existing SQLite/network payloads.
+Full sync and the existing size limits still apply.
+
+Shared-copy `payload` likewise becomes `{format_version:3,record:<Envelope>,files}`.
+The copy's existing random root key encrypts only shared metadata and file keys;
+its recipient sealed key box and signed transcript are unchanged. Making or
+updating a copy passes encrypted file blocks through without decrypting them.
+The recipient verifies the copy signature and decrypts metadata normally, but
+opens a file envelope only when saving that attachment. A recipient of the entire
+record necessarily receives the file keys too; this format adds no file-specific
+access-control or retroactive revocation guarantee.
+
+The desktop webview receives only `{id,name,size,data:<opaque random handle>}`.
+Keys and encrypted file blocks remain in native session memory. Handles are
+validated against all descriptor fields, deduplicated within the session and
+discarded on lock/profile change. Draft saving resolves these handles natively;
+the webview cannot supply raw file blocks or keys. A cancelled Save As dialog
+never opens the file envelope. After destination selection, the native core
+authenticates/decrypts the chosen block into a zeroizing buffer, verifies length,
+and only then writes to the user-selected path. No preview, temporary plaintext
+file or automatic opening is added.
+
+The independent libsodium vector is in
+[`test-vectors/attachment-v1.json`](test-vectors/attachment-v1.json). Tests cover
+that vector, AAD changes, ciphertext corruption without destination truncation,
+metadata access/editing with an unopened invalid file envelope, missing/extra
+blocks, handle forgery and invalidation, history, backup/offline restore, local to
+server transfer and recipient downloads. Cryptographic primitive implementations
+are unchanged; this is a new composition and storage format requiring review.

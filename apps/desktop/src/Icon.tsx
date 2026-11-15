@@ -1,5 +1,7 @@
 import { ReactNode } from "react";
 const paths: Record<string, ReactNode> = {
+  calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4m10-4v4M3 10h18m-12 4h2m4 0h2m-8 3h2" /></>,
+  expired: <><circle cx="12" cy="12" r="9" /><path d="M12 6v6l4 2M18 3l3 3" /></>,
   eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>,
   eye_off: <><path d="m3 3 18 18M10 5.2A13 13 0 0 1 12 5c6.5 0 10 7 10 7a20 20 0 0 1-3 4M6 6.5A21 21 0 0 0 2 12s3.5 7 10 7a13 13 0 0 0 5-1M10 10a3 3 0 0 0 4 4" /></>,
   share: (

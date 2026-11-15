@@ -17,8 +17,15 @@ mod launch;
 mod verification;
 #[cfg(windows)]
 mod windows_lock;
+#[derive(Default)]
+struct KeepassFiles {
+    profile: String,
+    database: Option<(String, PathBuf)>,
+    keyfile: Option<(String, PathBuf)>,
+}
 struct Desktop {
     client: Mutex<Client>,
+    keepass_files: Mutex<KeepassFiles>,
     pinned_server: Option<String>,
     startup_error: Option<String>,
     history_path: PathBuf,
@@ -79,11 +86,17 @@ async fn command(
             "touch"
                 | "sync"
                 | "list"
+                | "list_records"
                 | "groups"
                 | "create_group"
                 | "save"
                 | "history"
                 | "copy_field"
+                | "totp_parse"
+                | "totp_preview"
+                | "totp_code"
+                | "totp_qr"
+                | "totp_qr_import"
                 | "sharing"
                 | "resolve_recipient"
                 | "share_change"
@@ -92,6 +105,7 @@ async fn command(
                 | "import_local"
                 | "pick_attachment"
                 | "save_attachment"
+                | "keepass_pick_file"
                 | "keepass_prepare"
                 | "keepass_status"
                 | "keepass_commit"
@@ -122,7 +136,49 @@ async fn command(
                 )?;
             }
         }
-        match text(r, "action")?.as_str() {
+        let result = match text(r, "action")?.as_str() {
+            "totp_parse" => {
+                let value = secret(r, "value")?;
+                let config = neruvalo_client::totp::TotpConfig::parse(&value)?;
+                Ok(json!({"uri":config.uri()?,"config":config}))
+            }
+            "totp_preview" => {
+                let config: neruvalo_client::totp::TotpConfig =
+                    serde_json::from_value(r["config"].take())
+                        .map_err(|_| anyhow!("INVALID_TOTP"))?;
+                let qr = if r["qr"] == true {
+                    Some(config.qr()?)
+                } else {
+                    None
+                };
+                Ok(json!({"uri":config.uri()?,"code":config.current()?,"qr":qr}))
+            }
+            "totp_code" => Ok(serde_json::to_value(
+                c.totp_code(&text(r, "id")?, r["expected_version"].as_str())
+                    .await?,
+            )?),
+            "totp_qr" => Ok(json!(
+                c.totp_qr(&text(r, "id")?, r["expected_version"].as_str())
+                    .await?
+            )),
+            "totp_qr_import" => {
+                let Some(path) = app
+                    .dialog()
+                    .file()
+                    .add_filter("QR image", &["png", "jpg", "jpeg", "webp"])
+                    .add_filter("All files", &["*"])
+                    .blocking_pick_file()
+                else {
+                    return Ok(Value::Null);
+                };
+                let path = path.into_path().map_err(|_| anyhow!("INVALID_TOTP_QR"))?;
+                let config =
+                    tokio::task::spawn_blocking(move || neruvalo_client::totp::read_qr(&path))
+                        .await??;
+                let status = c.status();
+                launch::check_profile(r["expected_profile"].as_str(), status["profile"].as_str())?;
+                Ok(json!({"uri":config.uri()?,"config":config}))
+            }
             "keepass_status" => Ok(serde_json::to_value(c.keepass_import_status().await?)?),
             "keepass_last_report" => Ok(serde_json::to_value(c.keepass_last_report().await?)?),
             "keepass_open_report" => {
@@ -150,33 +206,74 @@ async fn command(
                 Ok(json!(true))
             }
             "keepass_commit" => c.commit_keepass_import(&text(r, "ticket")?).await,
+            "keepass_pick_file" => {
+                let status = c.status();
+                let profile = status["profile"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("LOCKED"))?
+                    .to_owned();
+                let kind = text(r, "kind")?;
+                let picker = app.dialog().file();
+                let picker = match kind.as_str() {
+                    "database" => picker.add_filter("KeePass KDBX", &["kdbx"]),
+                    "keyfile" => picker.add_filter("KeePass key file", &["key", "keyx", "xml"]),
+                    _ => anyhow::bail!("Invalid file kind"),
+                };
+                let Some(path) = picker.add_filter("All files", &["*"]).blocking_pick_file() else {
+                    return Ok(Value::Null);
+                };
+                let path = path.into_path().map_err(|_| anyhow!("Invalid path"))?;
+                let name = path
+                    .file_name()
+                    .ok_or_else(|| anyhow!("Invalid path"))?
+                    .to_string_lossy()
+                    .into_owned();
+                let id = uuid::Uuid::new_v4().to_string();
+                let mut files = state.keepass_files.lock().await;
+                if files.profile != profile {
+                    *files = KeepassFiles {
+                        profile,
+                        ..Default::default()
+                    };
+                }
+                let target = if kind == "database" {
+                    &mut files.database
+                } else {
+                    &mut files.keyfile
+                };
+                *target = Some((id.clone(), path));
+                Ok(json!({"id":id,"name":name}))
+            }
             "keepass_prepare" => {
                 let password = secret(r, "password")?;
                 let folder = text(r, "folder")?;
-                let Some(path) = app
-                    .dialog()
-                    .file()
-                    .add_filter("KeePass KDBX", &["kdbx"])
-                    .blocking_pick_file()
-                else {
-                    return Ok(Value::Null);
+                let file_id = text(r, "file_id")?;
+                let files = state.keepass_files.lock().await;
+                anyhow::ensure!(
+                    c.status()["profile"].as_str() == Some(files.profile.as_str()),
+                    "KEEPASS_PROFILE_CHANGED"
+                );
+                let path = files
+                    .database
+                    .as_ref()
+                    .filter(|(id, _)| id == &file_id)
+                    .map(|(_, path)| path.clone())
+                    .ok_or_else(|| anyhow!("KEEPASS_IMPORT_MISSING"))?;
+                let keyfile = match r.get("keyfile_id").and_then(Value::as_str) {
+                    Some(key_id) => Some(
+                        files
+                            .keyfile
+                            .as_ref()
+                            .filter(|(id, _)| id == key_id)
+                            .map(|(_, path)| path.clone())
+                            .ok_or_else(|| anyhow!("KEEPASS_IMPORT_MISSING"))?,
+                    ),
+                    None => None,
                 };
-                let keyfile = if r["use_keyfile"] == true {
-                    let Some(keyfile) = app.dialog().file().blocking_pick_file() else {
-                        return Ok(Value::Null);
-                    };
-                    Some(keyfile.into_path().map_err(|_| anyhow!("Invalid path"))?)
-                } else {
-                    None
-                };
+                drop(files);
                 Ok(serde_json::to_value(
-                    c.prepare_keepass_import(
-                        path.into_path().map_err(|_| anyhow!("Invalid path"))?,
-                        password,
-                        keyfile,
-                        folder,
-                    )
-                    .await?,
+                    c.prepare_keepass_import(path, password, keyfile, folder)
+                        .await?,
                 )?)
             }
             "pick_attachment" => {
@@ -191,7 +288,7 @@ async fn command(
             }
             "save_attachment" => {
                 anyhow::ensure!(c.status()["unlocked"] == true, "Vault is locked");
-                let attachment: Attachment = serde_json::from_value(r["attachment"].take())?;
+                let attachment = c.resolve_attachment(r["attachment"].take())?;
                 attachment.validate()?;
                 let Some(path) = app
                     .dialog()
@@ -333,33 +430,72 @@ async fn command(
                 c.create_group(text(r, "title")?, r["parent"].as_str())
                     .await
             }
-            "list" => Ok(serde_json::to_value(c.list().await?)?),
+            "list" => {
+                if r["summaries"] == true {
+                    let mut records = serde_json::to_value(c.list_summaries().await?)?;
+                    for record in records.as_array_mut().expect("Serialized list") {
+                        record["summary"] = json!(true);
+                    }
+                    Ok(records)
+                } else {
+                    Ok(serde_json::to_value(c.list().await?)?)
+                }
+            }
+            "list_records" => {
+                let ids: Vec<String> = serde_json::from_value(r["ids"].take())?;
+                if r["list_view"] == true {
+                    let mut rows = serde_json::to_value(c.list_rows(&ids).await?)?;
+                    for row in rows.as_array_mut().expect("Serialized rows") {
+                        row["summary"] = json!(true);
+                        row["row_loaded"] = json!(true);
+                    }
+                    Ok(rows)
+                } else {
+                    Ok(serde_json::to_value(c.list_records(&ids).await?)?)
+                }
+            }
             "history" => Ok(serde_json::to_value(c.history(&text(r, "id")?).await?)?),
             "save" => {
-                let data: RecordData = serde_json::from_value(r["data"].take())?;
+                let mut data: RecordData = serde_json::from_value(r["data"].take())?;
+                c.resolve_record_attachments(&mut data)?;
                 let id = r["id"].as_str().map(str::to_owned);
-                if r.get("group").is_some() {
-                    return c
-                        .save_in_group(
-                            id,
-                            r["expected_revision"]
-                                .as_i64()
-                                .ok_or_else(|| anyhow!("Missing revision"))?,
-                            data,
-                            r["archived"].as_bool().unwrap_or(false),
-                            r["group"].as_str(),
-                        )
-                        .await;
+                let mut result = if r.get("group").is_some() {
+                    c.save_in_group(
+                        id,
+                        r["expected_revision"]
+                            .as_i64()
+                            .ok_or_else(|| anyhow!("Missing revision"))?,
+                        data,
+                        r["archived"].as_bool().unwrap_or(false),
+                        r["group"].as_str(),
+                    )
+                    .await?
+                } else {
+                    c.save(
+                        id,
+                        r["expected_revision"]
+                            .as_i64()
+                            .ok_or_else(|| anyhow!("Missing revision"))?,
+                        data,
+                        r["archived"].as_bool().unwrap_or(false),
+                    )
+                    .await?
+                };
+                let id = result["record_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("RECORD_NOT_FOUND"))?
+                    .to_owned();
+                let record = c
+                    .list_records(&[id])
+                    .await?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow!("RECORD_NOT_FOUND"))?;
+                result["record"] = serde_json::to_value(record)?;
+                if r["group"].as_str() != result["group_id"].as_str() {
+                    result["groups"] = serde_json::to_value(c.groups().await?)?;
                 }
-                c.save(
-                    id,
-                    r["expected_revision"]
-                        .as_i64()
-                        .ok_or_else(|| anyhow!("Missing revision"))?,
-                    data,
-                    r["archived"].as_bool().unwrap_or(false),
-                )
-                .await
+                Ok(result)
             }
             "settings" => {
                 c.settings(
@@ -406,29 +542,18 @@ async fn command(
             "copy_field" => {
                 let seconds = r["seconds"].as_u64().unwrap_or(30);
                 anyhow::ensure!(seconds <= 3600, "Invalid clipboard timeout");
-                let received = c.sharing().await?;
-                let shared = received["incoming"]
-                    .as_array()
-                    .and_then(|v| v.iter().find(|v| v["record_id"] == r["id"]));
-                let list = if let Some(shared) = shared {
-                    vec![serde_json::from_value::<neruvalo_client::RecordData>(
-                        shared["data"].clone(),
-                    )?]
+                let id = text(r, "id")?;
+                let field = text(r, "field")?;
+                let value = Zeroizing::new(if field == "totp_code" {
+                    c.totp_code(&id, r["expected_version"].as_str()).await?.code
                 } else {
-                    c.history(&text(r, "id")?)
+                    c.record_data(&id, r["expected_version"].as_str())
                         .await?
-                        .into_iter()
-                        .map(|v| v.data)
-                        .collect()
-                };
-                let current = list.first().ok_or_else(|| anyhow!("Record not found"))?;
-                let value = Zeroizing::new(
-                    current
                         .fields
-                        .get(&text(r, "field")?)
+                        .get(&field)
                         .ok_or_else(|| anyhow!("Field not found"))?
-                        .clone(),
-                );
+                        .clone()
+                });
                 anyhow::ensure!(!value.is_empty(), "Field is empty");
                 arboard::Clipboard::new()?.set_text(value.as_str())?;
                 let sequence = state.clipboard_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -448,11 +573,19 @@ async fn command(
                 Ok(Value::Null)
             }
             _ => Err(anyhow!("Unsupported command")),
-        }
+        }?;
+        c.expose_attachments(result)
     }
     #[cfg(debug_assertions)]
     let action = request["action"].as_str().unwrap_or("unknown").to_owned();
-    dispatch(&app, &state, &mut request).await.map_err(|e| {
+    let result = dispatch(&app, &state, &mut request).await;
+    if result
+        .as_ref()
+        .is_err_and(neruvalo_client::is_unsupported_vault_error)
+    {
+        state.client.lock().await.lock();
+    }
+    result.map_err(|e| {
         #[cfg(debug_assertions)]
         eprintln!("Neruvalo command {action} failed: {e:#}");
         e.to_string()
@@ -483,6 +616,7 @@ fn main() {
                 startup_error,
                 client: Mutex::new(client),
                 clipboard_generation: Arc::new(AtomicU64::new(0)),
+                keepass_files: Mutex::new(KeepassFiles::default()),
             });
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

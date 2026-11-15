@@ -76,6 +76,10 @@ export function setPreference(value: string) {
   writeLocal("neruvalo.language", preference);
   changed();
 }
+export function systemDateLocale(): string {
+  try { return Intl.getCanonicalLocales(systemLocale.replaceAll("_", "-").split(".")[0])[0]; }
+  catch { return new Intl.DateTimeFormat().resolvedOptions().locale; }
+}
 export function currentLanguage() {
   return preference === "auto" ? resolveLocale(systemLocale) : preference;
 }

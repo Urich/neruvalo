@@ -1,6 +1,8 @@
 use super::*;
 use keepass::{db::GroupRef, Database, DatabaseKey};
 use std::io::Read;
+mod metadata;
+mod references;
 
 const JOURNAL: &str = "keepass_import";
 const LAST_REPORT: &str = "keepass_import:last_report";
@@ -70,8 +72,6 @@ fn source_path(group: &GroupRef<'_>) -> Vec<String> {
 fn time_fields(times: &keepass::db::Times) -> Vec<&'static str> {
     let mut fields = vec![];
     for (name, present) in [
-        ("CreationTime", times.creation.is_some()),
-        ("LastModificationTime", times.last_modification.is_some()),
         ("LastAccessTime", times.last_access.is_some()),
         ("LocationChanged", times.location_changed.is_some()),
         ("UsageCount", times.usage_count.is_some()),
@@ -120,6 +120,7 @@ impl Plan {
         depth: usize,
         inherited_tags: &[String],
         recycle: Option<Uuid>,
+        references: &references::References,
     ) -> Result<()> {
         ensure!(
             depth <= 62 && self.records.len() < 10000,
@@ -137,7 +138,11 @@ impl Plan {
             group_path: source_path(&group),
             source_id: group.id().to_string(),
         };
-        let data = Client::group_data(title.into(), Some(parent.into()), None);
+        let mut data = Client::group_data(title.into(), Some(parent.into()), None);
+        metadata::times(&mut data, &group.times);
+        if metadata::icon(&mut data, group.icon(), group.custom_icon()).is_err() {
+            self.issue(&context, "Icon", "icon_unsupported", true)?;
+        }
         if data.validate().is_err() {
             self.issue(&context, "Name", "record_limit", true)?;
         }
@@ -148,7 +153,6 @@ impl Plan {
                 "Notes",
                 group.notes.as_deref().is_some_and(|s| !s.is_empty()),
             ),
-            ("Icon", group.icon().is_some()),
             ("Tags", !group.tags.is_empty()),
             (
                 "DefaultAutoTypeSequence",
@@ -206,7 +210,39 @@ impl Plan {
                     data.tags.push(tag.clone());
                 }
             }
+            metadata::times(&mut data, &entry.times);
+            if metadata::icon(&mut data, entry.icon(), entry.custom_icon()).is_err() {
+                self.issue(&context, "Icon", "icon_unsupported", true)?;
+            }
+            let mut resolved = BTreeMap::new();
+            let mut originals = BTreeMap::new();
+            let source_id = entry.id().uuid().simple().to_string().to_ascii_uppercase();
             for (key, value) in &entry.fields {
+                match references.field(&source_id, key) {
+                    Ok(value_resolved) => {
+                        if &value_resolved != value.get() {
+                            originals.insert(key.clone(), value.get().clone());
+                            self.issue(&context, key, "references_resolved", false)?;
+                        }
+                        resolved.insert(key.clone(), value_resolved);
+                    }
+                    Err(_) => {
+                        self.issue(&context, key, "references_invalid", true)?;
+                        resolved.insert(key.clone(), value.get().clone());
+                    }
+                }
+            }
+            if !originals.is_empty() {
+                data.extra
+                    .insert("keepass_references".into(), json!(originals));
+            }
+            data.title = resolved
+                .get("Title")
+                .filter(|s| !s.trim().is_empty())
+                .cloned()
+                .unwrap_or(title.clone());
+            data.notes = resolved.get("Notes").cloned().unwrap_or_default();
+            for (key, value) in &resolved {
                 let target = match key.as_str() {
                     "Title" | "Notes" => continue,
                     "UserName" => "login".into(),
@@ -214,18 +250,28 @@ impl Plan {
                     "URL" => "url".into(),
                     _ => format!("custom:{key}"),
                 };
-                data.fields.insert(target, value.get().clone());
+                data.fields.insert(target, value.clone());
             }
-            for (field, value) in &entry.fields {
-                let upper = value.get().to_ascii_uppercase();
-                if upper.contains("{REF:") || upper.contains("{S:") {
-                    self.issue(&context, field, "references", false)?;
+            match metadata::totp(&resolved, &data.title) {
+                Ok(Some(uri)) => {
+                    data.fields.insert("totp".into(), uri);
+                    if data
+                        .fields
+                        .get("password")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("{TIMEOTP}"))
+                    {
+                        data.fields.insert("password".into(), String::new());
+                        data.fields
+                            .insert("custom:KeePass Password Source".into(), "{TIMEOTP}".into());
+                    }
+                    self.issue(&context, "TOTP", "totp_converted", false)?;
                 }
+                Ok(None) => (),
+                Err(_) => self.issue(&context, "TOTP", "totp_invalid", true)?,
             }
             for (field, present) in [
                 ("AutoType", entry.autotype.is_some()),
                 ("OverrideURL", entry.override_url.is_some()),
-                ("Icon", entry.icon().is_some()),
                 ("ForegroundColor", entry.foreground_color.is_some()),
                 ("BackgroundColor", entry.background_color.is_some()),
                 ("QualityCheck", true),
@@ -243,7 +289,10 @@ impl Plan {
                     false,
                 )?;
             }
-            for field in time_fields(&entry.times) {
+            for field in time_fields(&entry.times)
+                .into_iter()
+                .filter(|f| !["Expires", "ExpiryTime"].contains(f))
+            {
                 self.issue(&context, format!("Times.{field}"), "entry_metadata", false)?;
             }
             self.report.history_versions +=
@@ -288,11 +337,17 @@ impl Plan {
                     )?;
                     continue;
                 }
-                let attachment = Attachment {
-                    id: Uuid::new_v4().to_string(),
-                    name: name.into(),
-                    size: bytes.len(),
-                    data: b64(bytes),
+                let attachment = match Attachment::from_bytes(name.into(), &bytes) {
+                    Ok(file) => file,
+                    Err(_) => {
+                        self.issue(
+                            &context,
+                            format!("Attachments.{name}"),
+                            "attachment_name",
+                            true,
+                        )?;
+                        continue;
+                    }
                 };
                 total = total.saturating_add(bytes.len());
                 let reason = if attachment.validate().is_err() {
@@ -332,7 +387,7 @@ impl Plan {
             self.push(Uuid::new_v4().to_string(), data, archived)?;
         }
         for child in group.groups() {
-            self.group(child, &id, archived, depth + 1, &tags, recycle)?;
+            self.group(child, &id, archived, depth + 1, &tags, recycle, references)?;
         }
         Ok(())
     }
@@ -405,7 +460,8 @@ fn parse(
     } else {
         db.meta.recyclebin_uuid
     };
-    plan.group(db.root(), &root_id, false, 1, &[], recycle)?;
+    let references = references::References::new(&db);
+    plan.group(db.root(), &root_id, false, 1, &[], recycle, &references)?;
     plan.report.issues.sort_by(|a, b| {
         (&a.group_path, &a.source_id, &a.field, &a.code).cmp(&(
             &b.group_path,
@@ -465,13 +521,51 @@ async fn store(a: &Unlocked, prepared: &mut Prepared) -> Result<()> {
     prepared.stored = Some(encoded);
     Ok(())
 }
-fn online(a: &Unlocked) -> Result<()> {
+fn writable_vault(a: &Unlocked) -> Result<()> {
     ensure!(
-        a.profile.kind == ProfileKind::Server && a.online && !a.token.is_empty(),
+        a.profile.kind == ProfileKind::Local || (a.online && !a.token.is_empty()),
         "ONLINE_LOGIN_REQUIRED"
     );
     ensure!(!a.needs_sync, "SYNCHRONIZATION_REQUIRED");
     Ok(())
+}
+// The journal, imported versions and completed report change atomically. A failed
+// transaction can be retried with the same ticket without partial imports.
+async fn commit_local_import(a: &Unlocked, mut prepared: Prepared) -> Result<Value> {
+    prepared.report.completed = true;
+    prepared.report.dispatched = false;
+    let envelope = crypto::seal(
+        a._root.as_ref(),
+        &Zeroizing::new(serde_json::to_vec(&prepared.report)?),
+        REPORT_CONTEXT,
+    )?;
+    let mut tx = a.cache.begin().await?;
+    let removed = sqlx::query("DELETE FROM meta WHERE name=$1 AND value=$2")
+        .bind(JOURNAL)
+        .bind(&prepared.stored)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    ensure!(removed == 1, "KEEPASS_IMPORT_MISSING");
+    for version in &prepared.request.versions {
+        ensure!(
+            version.revision == 1 && version.previous_version.is_none(),
+            "INVALID_REVISION"
+        );
+        verify_version(&a.profile, version)?;
+        view(a, version)?.data.validate()?;
+        sqlx::query("INSERT INTO versions(id,record_id,revision,body) VALUES($1,$2,$3,$4)")
+            .bind(&version.version_id)
+            .bind(&version.record_id)
+            .bind(version.revision)
+            .bind(serde_json::to_string(version)?)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
+        .bind(LAST_REPORT).bind(serde_json::to_string(&envelope)?).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(json!({"imported": prepared.request.versions.len()}))
 }
 impl Client {
     pub async fn keepass_last_report(&mut self) -> Result<Option<KeepassReport>> {
@@ -519,16 +613,19 @@ impl Client {
         folder: String,
     ) -> Result<KeepassReport> {
         let a = self.unlocked()?;
-        online(a)?;
+        writable_vault(a)?;
         ensure!(load(a).await?.is_none(), "KEEPASS_IMPORT_PENDING");
-        self.sync().await?;
+        if a.profile.kind != ProfileKind::Local {
+            self.sync().await?;
+        }
         let a = self.unlocked()?;
         let profile = a.profile.id.clone();
         let plan =
             tokio::task::spawn_blocking(move || parse(&path, password, keyfile.as_deref(), folder))
                 .await??;
         let a = self.unlocked()?;
-        online(a)?;
+        writable_vault(a)?;
+        // Parsing runs outside this task; recheck the destination before staging writes.
         ensure!(a.profile.id == profile, "KEEPASS_PROFILE_CHANGED");
         let mut request = ImportVault {
             operation_id: Uuid::new_v4().to_string(),
@@ -536,9 +633,9 @@ impl Client {
         };
         for (record_id, data, archived) in plan.records {
             let version_id = Uuid::new_v4().to_string();
-            let payload = crypto::encrypt_version(
+            let payload = attachments::encrypt_record(
                 &a.keys,
-                &Zeroizing::new(serde_json::to_vec(&data)?),
+                &data,
                 &version_context(
                     &a.profile.server_id,
                     &a.profile.account_id,
@@ -552,7 +649,7 @@ impl Client {
                 version_id,
                 expected_revision: 0,
                 previous_version: None,
-                payload: serde_json::to_value(payload)?,
+                payload,
                 signature: String::new(),
                 archived,
             };
@@ -622,7 +719,7 @@ impl Client {
     pub async fn commit_keepass_import(&mut self, ticket: &str) -> Result<Value> {
         let http = self.http.clone();
         let a = self.unlocked()?;
-        online(a)?;
+        writable_vault(a)?;
         let mut prepared = load(a)
             .await?
             .ok_or_else(|| anyhow!("KEEPASS_IMPORT_MISSING"))?;
@@ -630,6 +727,9 @@ impl Client {
             prepared.report.ticket == ticket && prepared.report.can_confirm,
             "KEEPASS_IMPORT_BLOCKED"
         );
+        if a.profile.kind == ProfileKind::Local {
+            return commit_local_import(a, prepared).await;
+        }
         prepared.report.dispatched = true;
         store(a, &mut prepared).await?;
         let result = http
@@ -716,6 +816,8 @@ fn render_report(report: &KeepassReport, labels: &BTreeMap<String, String>) -> S
     for issue in &report.issues {
         let action = if issue.blocking {
             "reportRejected"
+        } else if ["references_resolved", "totp_converted"].contains(&issue.code.as_str()) {
+            "reportConverted"
         } else if issue.code == "references" {
             "reportAsText"
         } else {
@@ -837,10 +939,12 @@ mod tests {
         assert_eq!(data.notes, "Note");
         assert_eq!(data.fields["custom:Extra"], "custom-secret");
         assert_eq!(data.tags, ["inherited", "own"]);
-        assert_eq!(
-            unb64(data.extra["attachments"][0]["data"].as_str().unwrap()).unwrap(),
-            [0, 255, 42]
-        );
+        let imported_file: Attachment =
+            serde_json::from_value(data.extra["attachments"][0].clone()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("file.bin");
+        imported_file.save_to(&output).unwrap();
+        assert_eq!(std::fs::read(output).unwrap(), [0, 255, 42]);
         let parent = data.extra["group_id"].as_str().unwrap();
         assert!(plan
             .records
@@ -860,6 +964,107 @@ mod tests {
             .iter()
             .any(|i| i.code == "attachment_size" && i.blocking));
     }
+    #[test]
+    fn imports_icons_times_expiration_references_and_totp_from_kdbx() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("metadata.kdbx");
+        let mut db = Database::new();
+        db.config.kdf_config = keepass::config::KdfConfig::Aes { rounds: 10 };
+        db.root_mut().set_icon_builtin(48);
+        let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=").unwrap();
+        let source = db.root_mut().add_entry().id();
+        {
+            let mut entry = db.entry_mut(source).unwrap();
+            entry.set_unprotected("Title", "Source");
+            entry.set_protected("Password", "source-password");
+            entry.times.creation = Some("2020-01-02T03:04:05".parse().unwrap());
+            entry.times.last_modification = Some("2022-02-03T04:05:06".parse().unwrap());
+            entry.times.expiry = "2030-03-04T05:06:07".parse().unwrap();
+            entry.times.expires = Some(true);
+            entry.set_icon_custom_new(png.clone());
+            entry.set_protected("TimeOtp-Secret-Base32", "JBSWY3DPEHPK3PXP");
+            entry.set_unprotected("TimeOtp-Period", "60");
+            entry.set_unprotected("TimeOtp-Length", "8");
+            entry.set_unprotected("TimeOtp-Algorithm", "HMAC-SHA-256");
+        }
+        let linked = db.root_mut().add_entry().id();
+        {
+            let mut entry = db.entry_mut(linked).unwrap();
+            entry.set_unprotected("Title", "Linked");
+            entry.set_protected(
+                "Password",
+                &format!("{{REF:P@I:{}}}", source.uuid().simple()),
+            );
+            entry.set_unprotected("UserName", "{S:Email}");
+            entry.set_unprotected("Email", "name@example.test");
+            entry.set_icon_builtin(1);
+            entry.times.expires = Some(false);
+        }
+        db.save(
+            &mut std::fs::File::create(&file).unwrap(),
+            DatabaseKey::new().with_password("demopass"),
+        )
+        .unwrap();
+        let plan = parse(&file, password(), None, "Imported".into()).unwrap();
+        assert!(plan.report.can_confirm);
+        assert!(plan.records.iter().any(|(_, d, _)| d.record_type == "group"
+            && d.extra.get("keepass_icon_id") == Some(&json!(48))));
+        let source_record = &plan
+            .records
+            .iter()
+            .find(|(_, d, _)| d.title == "Source")
+            .unwrap()
+            .1;
+        assert_eq!(source_record.extra["created_at"], 1577934245i64);
+        assert_eq!(source_record.extra["modified_at"], 1643861106i64);
+        assert_eq!(source_record.fields["expires"], "2030-03-04T05:06:07+00:00");
+        assert_eq!(source_record.fields["never_expires"], "false");
+        assert_eq!(
+            source_record.extra["icon"],
+            format!("data:image/png;base64,{}", STANDARD.encode(&png))
+        );
+        assert!(source_record.fields["totp"].contains("period=60"));
+        assert!(source_record.fields["totp"].contains("algorithm=SHA256"));
+        let linked_record = &plan
+            .records
+            .iter()
+            .find(|(_, d, _)| d.title == "Linked")
+            .unwrap()
+            .1;
+        assert_eq!(linked_record.fields["password"], "source-password");
+        assert_eq!(linked_record.fields["login"], "name@example.test");
+        assert_eq!(linked_record.fields["never_expires"], "true");
+        assert_eq!(linked_record.extra["keepass_icon_id"], 1);
+        assert!(linked_record.extra["keepass_references"]["Password"]
+            .as_str()
+            .unwrap()
+            .starts_with("{REF:"));
+        assert!(!serde_json::to_string(&plan.report)
+            .unwrap()
+            .contains("source-password"));
+        assert!(plan
+            .report
+            .issues
+            .iter()
+            .any(|i| i.code == "references_resolved"));
+        let mut entry = db.entry_mut(linked).unwrap();
+        entry.set_protected("Password", "{REF:P@T:Missing}");
+        drop(entry);
+        db.save(
+            &mut std::fs::File::create(&file).unwrap(),
+            DatabaseKey::new().with_password("demopass"),
+        )
+        .unwrap();
+        let plan = parse(&file, password(), None, "Imported".into()).unwrap();
+        assert!(!plan.report.can_confirm);
+        assert!(plan
+            .report
+            .issues
+            .iter()
+            .any(|i| i.code == "references_invalid" && i.blocking));
+    }
+
     #[test]
     fn rejects_corruption_truncation_and_hostile_kdf_before_work() {
         let dir = tempfile::tempdir().unwrap();
@@ -956,6 +1161,85 @@ mod tests {
         assert!(!html.contains("test-secret"));
         assert!(!html.contains("custom-secret"));
         assert!(html.contains("default-src 'none'"));
+    }
+
+    #[tokio::test]
+    async fn local_import_is_atomic_and_resumes_after_unlock_without_a_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let client_dir = dir.path().join("client");
+        let file = dir.path().join("local-source.kdbx");
+        test_db(&file, false);
+        let vault_password = || Zeroizing::new("local import vault password".into());
+        let mut c = Client::new(client_dir.clone()).unwrap();
+        let profile = c
+            .create_local("Local import", vault_password())
+            .await
+            .unwrap();
+        let profile = profile["profile"].as_str().unwrap().to_owned();
+        c.settings(900).await.unwrap();
+        c.create_group("Existing".into(), None).await.unwrap();
+        let cancelled = c
+            .prepare_keepass_import(file.clone(), password(), None, "Cancelled".into())
+            .await
+            .unwrap();
+        assert!(c.list().await.unwrap().is_empty());
+        c.cancel_keepass_import(&cancelled.ticket).await.unwrap();
+        test_db(&file, true);
+        let blocked = c
+            .prepare_keepass_import(file.clone(), password(), None, "Blocked".into())
+            .await
+            .unwrap();
+        assert!(!blocked.can_confirm);
+        assert!(c.commit_keepass_import(&blocked.ticket).await.is_err());
+        c.cancel_keepass_import(&blocked.ticket).await.unwrap();
+        test_db(&file, false);
+        let preview = c
+            .prepare_keepass_import(file, password(), None, "Imported".into())
+            .await
+            .unwrap();
+        c.lock();
+        drop(c);
+        let mut c = Client::new(client_dir).unwrap();
+        c.unlock_offline(&profile, vault_password()).await.unwrap();
+        assert_eq!(
+            c.keepass_import_status().await.unwrap().unwrap().ticket,
+            preview.ticket
+        );
+        assert!(c.commit_keepass_import("wrong-ticket").await.is_err());
+        // A duplicate version forces a failure after the first insert. Both the
+        // earlier insert and journal removal must roll back with the transaction.
+        let a = c.unlocked().unwrap();
+        let mut prepared = load(a).await.unwrap().unwrap();
+        prepared
+            .request
+            .versions
+            .push(prepared.request.versions[0].clone());
+        store(a, &mut prepared).await.unwrap();
+        assert!(c.commit_keepass_import(&preview.ticket).await.is_err());
+        assert!(c.list().await.unwrap().is_empty());
+        assert_eq!(c.groups().await.unwrap().len(), 1);
+        assert!(c.keepass_last_report().await.unwrap().is_none());
+        let a = c.unlocked().unwrap();
+        let mut prepared = load(a).await.unwrap().unwrap();
+        prepared.request.versions.pop();
+        store(a, &mut prepared).await.unwrap();
+        c.commit_keepass_import(&preview.ticket).await.unwrap();
+        assert!(c.keepass_import_status().await.unwrap().is_none());
+        let report = c.keepass_last_report().await.unwrap().unwrap();
+        assert!(report.completed && !report.dispatched);
+        let entries = c.list().await.unwrap();
+        assert_eq!(entries.len(), preview.entries);
+        assert_eq!(c.groups().await.unwrap().len(), preview.groups + 1);
+        assert!(entries.iter().any(|r| r.archived));
+        let entry = entries.iter().find(|r| r.data.title == "Service").unwrap();
+        assert_eq!(entry.data.fields["password"], "test-secret");
+        assert_eq!(entry.data.extra["attachments"][0]["size"], 3);
+        assert!(c.commit_keepass_import(&preview.ticket).await.is_err());
+        assert_eq!(c.list().await.unwrap().len(), preview.entries);
+        c.lock();
+        c.unlock_offline(&profile, vault_password()).await.unwrap();
+        assert!(c.keepass_last_report().await.unwrap().unwrap().completed);
+        assert_eq!(c.list().await.unwrap().len(), preview.entries);
     }
 
     #[tokio::test]

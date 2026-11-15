@@ -94,3 +94,18 @@ it("translates password failures and updates messages when the application local
   expect(host.querySelector('[role="alert"]')!.textContent).toBe(translate("ui.incorrectPasswordOrDamagedData", "ru"));
   expect(host.textContent).not.toContain("incorrect secret or damaged data");
 });
+
+
+it("closes restoration when the app rejects an incompatible vault format", async () => {
+  const reject = vi.fn().mockResolvedValue(true);
+  await act(async () => root.render(<LocalVaultTools status={{unlocked:false}} profiles={[]} source=""
+    onSource={source} onChanged={changed} onConnect={connect} onUnsupportedVault={reject} />));
+  await click("Restore from backup");
+  await fill(host.querySelector<HTMLInputElement>('dialog input[type="password"]')!, "local-password-123");
+  const error = new Error("UNSUPPORTED_VAULT_FORMAT");
+  native.invoke.mockRejectedValueOnce(error);
+  await act(async () => host.querySelector<HTMLButtonElement>('[type="submit"]')!.click());
+  expect(reject).toHaveBeenCalledWith(error);
+  expect(host.querySelector("dialog")).toBeNull();
+  expect(changed).not.toHaveBeenCalled();
+});

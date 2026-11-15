@@ -193,7 +193,7 @@ beforeEach(() => {
           ...native.records.filter((e) => e.record_id !== id),
           value,
         ];
-        return { record_id: id, group_id: r.group ?? null };
+        return { record_id: id, group_id: r.group ?? null, record: value };
       }
       case "login":
       case "unlock_offline":
@@ -320,6 +320,8 @@ describe("universal document editor", () => {
     await login();
     await click(button("Документы"));
     await click(button("＋ Добавить запись"));
+    expect(document.querySelectorAll('.detail-panel input[data-date-input="date"]')).toHaveLength(2);
+    expect([...document.querySelectorAll('.detail-panel label.check')].some(label => label.textContent?.includes("Без срока"))).toBe(false);
     await change(
       document.querySelector<HTMLInputElement>(".detail-panel input")!,
       "International ID",
