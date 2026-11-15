@@ -1144,3 +1144,15 @@ kbd {
   .vault-screen .search, .vault-screen .list-caption {flex-shrink:0;}
   .vault-screen .entry-tree {min-height:0;overflow:auto;overscroll-behavior:contain;}
 }
+
+.custom-record-icon { width: 32px; height: 32px; object-fit: contain; }
+.large-icon .custom-record-icon { width: 48px; height: 48px; }
+.record-dates { font-size: .85rem; opacity: .8; }
+.record-dates > div { display: flex; gap: 1rem; }
+.record-dates dd { margin: 0; }
+.icon-editor-controls { display: flex; align-items: flex-end; gap: 12px; }
+.icon-editor-controls label { flex: 1; min-width: 0; margin: 0; }
+.icon-editor-controls input { max-width: 100%; }
+.icon-editor-controls > button { flex-shrink: 0; }
+.secret-toggle { display: inline-flex; align-items: center; justify-content: center; }
+.password-generator-field .secret-toggle { width: auto; flex-shrink: 0; }

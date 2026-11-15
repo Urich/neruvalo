@@ -971,7 +971,7 @@ impl Client {
         &mut self,
         id: Option<String>,
         expected_revision: i64,
-        data: RecordData,
+        mut data: RecordData,
         archived: bool,
         creation_id: Option<String>,
     ) -> Result<Value> {
@@ -1024,6 +1024,17 @@ impl Client {
             ensure!(expected_revision == 0, "INVALID_REVISION");
             None
         };
+        let now = serde_json::json!(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs());
+        if previous.is_none() {
+            data.extra.insert("created_at".into(), now.clone());
+        }
+        data.extra.insert("modified_at".into(), now.clone());
+        if archived {
+            data.extra.entry("archived_at".into()).or_insert(now);
+        }
+        data.validate()?;
         let id = id
             .or(creation_id)
             .unwrap_or_else(|| Uuid::new_v4().to_string());

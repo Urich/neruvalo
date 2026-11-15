@@ -39,5 +39,5 @@ it("rejects exceeding the total limit before updating the draft", async () => {
   await act(async () => root.render(<Attachments items={files} profile="alice" onChange={changed} />));
   native.invoke.mockResolvedValue(file); await click("Add file");
   expect(changed).not.toHaveBeenCalled();
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain("4 MiB");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("4.194304 MB");
 });

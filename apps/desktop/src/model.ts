@@ -1,6 +1,10 @@
 import { catalogs } from "./i18n";
 export type Attachment = { id: string; name: string; size: number; data: string };
 export type Data = {
+  icon?: string;
+  created_at?: number;
+  modified_at?: number;
+  archived_at?: number;
   attachments?: Attachment[];
   record_type: string;
   schema_version: number;

@@ -313,7 +313,15 @@ impl Client {
                 continue;
             }
             let version_id = Uuid::new_v4().to_string();
-            let raw = Zeroizing::new(serde_json::to_vec(&r.data)?);
+            let mut data = r.data.clone();
+            let now = serde_json::json!(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs());
+            data.extra.insert("modified_at".into(), now.clone());
+            if archived {
+                data.extra.insert("archived_at".into(), now);
+            }
+            let raw = Zeroizing::new(serde_json::to_vec(&data)?);
             let payload = crypto::encrypt_version(
                 &a.keys,
                 &raw,

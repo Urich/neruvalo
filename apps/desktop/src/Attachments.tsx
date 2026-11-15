@@ -7,7 +7,7 @@ export function Attachments({ items = [], profile, disabled = false, onChange }:
   items?: Attachment[]; profile?: string; disabled?: boolean;
   onChange?: (items: Attachment[]) => void;
 }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const mounted = useRef(true);
@@ -21,9 +21,8 @@ export function Attachments({ items = [], profile, disabled = false, onChange }:
   if (!onChange && !items.length) return null;
   return <section className="attachments" aria-label={t("ui.attachments")}>
     <h3>{t("ui.attachments")}</h3>
-    {onChange && <p className="muted">{t("ui.attachmentLimits")}</p>}
     {items.map((item) => <div className="field" key={item.id}>
-      <div><span><bdi>{item.name}</bdi> · {(item.size / 1024).toFixed(1)} KiB</span>
+      <div><span><bdi>{item.name}</bdi> · {(item.size / 1_000_000).toLocaleString(language, { maximumFractionDigits: 6 })} {language === "ru" ? "МБ" : "MB"}</span>
         <span>
           <button type="button" className="subtle" disabled={disabled || busy} onClick={() => void run(async () => {
             await invoke("command", { request: { action: "save_attachment", expected_profile: profile, attachment: item } });

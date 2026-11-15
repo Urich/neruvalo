@@ -1,3 +1,5 @@
+import { EntryIcon, IconEditor } from "./RecordIcon";
+import { useDisabledHints } from "./disabledHints";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -706,8 +708,10 @@ export default function App() {
       setNotice("ui.allChangesDownloaded");
     });
   }
+  useDisabledHints(t(busy ? "ui.pleaseWait" : needsSync ? "ui.synchronizeAndReopenTheEntryBeforeSaving" : status.unlocked && !(status.online || status.local) ? "ui.offlineAccessIsReadOnly" : "ui.actionUnavailable"));
+  const unchanged = !!draft && !!selected && JSON.stringify(draft) === JSON.stringify(selected.data) && draftGroup === (selected.data.group_id ?? null);
   async function save() {
-    if (!draft) return;
+    if (!draft || unchanged) return;
     await run(async () => {
       const result = await call("save", {
         id: selected?.record_id ?? null,
@@ -1622,7 +1626,7 @@ export default function App() {
                                 }
                               >
                                 <input
-                                  type={secret ? "password" : "text"}
+                                  type={secret && !revealed[key] ? "password" : "text"}
                                   autoComplete="off"
                                   value={draft.fields[key] ?? ""}
                                   onChange={(e) =>
@@ -1635,6 +1639,7 @@ export default function App() {
                                     })
                                   }
                                 />
+                                {secret && <button type="button" className="secondary secret-toggle" aria-label={t(revealed[key] ? "ui.hide" : "ui.show")} title={t(revealed[key] ? "ui.hide" : "ui.show")} aria-pressed={!!revealed[key]} onClick={() => setRevealed({ ...revealed, [key]: !revealed[key] })}><Icon name={revealed[key] ? "eye_off" : "eye"} /></button>}
                                 {key === "password" && (
                                   <button
                                     type="button"
@@ -1742,14 +1747,16 @@ export default function App() {
                           />
                         </label>
                       </div>
+                      <IconEditor value={draft.icon} onChange={(icon) => setDraft(current => current ? { ...current, icon } : current)} />
                       <button
                         className="primary full"
                         disabled={
                           busy ||
                           needsSync ||
                           !(status.online || status.local) ||
-                          !draft.title.trim()
+                          !draft.title.trim() || unchanged
                         }
+                        title={unchanged ? t("ui.noChanges") : !draft.title.trim() ? t("ui.recordTitleRequired") : undefined}
                         onClick={save}
                       >
                         {t("ui.encryptAndSave")}
@@ -1767,12 +1774,13 @@ export default function App() {
                           </h2>
                         </div>
                         <span className="large-icon">
-                          <Icon
+                          <EntryIcon data={selected.data}
                             name={selected.data.record_type}
                             label={t(currentType?.label ?? "ui.unknownType")}
                           />
                         </span>
                       </div>
+                      <dl className="record-dates">{([['created_at', 'createdDate'], ['modified_at', 'modifiedDate'], ['archived_at', 'archivedDate']] as const).filter(([key]) => key !== 'archived_at' || selected.archived || selected.data.archived_at).map(([key, label]) => <div key={key}><dt>{t(`ui.${label}`)}</dt><dd>{selected.data[key] ? new Date(selected.data[key]! * 1000).toLocaleString(language) : t("ui.unknownDate")}</dd></div>)}</dl>
                       {fieldsOf(selected.data)
                         .filter(
                           ([key]) =>
@@ -1798,7 +1806,10 @@ export default function App() {
                                 <span>
                                   {secret && (
                                     <button
-                                      className="subtle"
+                                      className="subtle secret-toggle"
+                                      aria-label={t(revealed[key] ? "ui.hide" : "ui.show")}
+                                      title={t(revealed[key] ? "ui.hide" : "ui.show")}
+                                      aria-pressed={!!revealed[key]}
                                       onClick={() =>
                                         setRevealed({
                                           ...revealed,
@@ -1806,9 +1817,7 @@ export default function App() {
                                         })
                                       }
                                     >
-                                      {revealed[key]
-                                        ? t("ui.hide")
-                                        : t("ui.show")}
+                                      <Icon name={revealed[key] ? "eye_off" : "eye"} />
                                     </button>
                                   )}
                                   <button

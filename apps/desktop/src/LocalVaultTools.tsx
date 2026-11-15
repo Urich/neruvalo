@@ -59,6 +59,7 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
     } catch (e) { setError(errorText(e)); }
     finally { setBusy(false); }
   }
+  const hint = busy ? "ui.pleaseWait" : action === "create_local" && !name.trim() ? "ui.nameRequired" : action === "create_local" && password.length < 12 ? "ui.passwordMinimum" : action === "create_local" && password !== confirmation ? "ui.passwordMismatch" : action !== "connect" && !password ? "ui.localMasterPassword" : action === "import_local" && !source ? "ui.localVault" : "";
   return <div className={toolbar ? "local-vault-tools local-vault-toolbar" : "local-vault-tools"}>
     {!importsOnly && !status.unlocked && <>
       {!restoreOnly && <button type="button" className={toolbar ? "subtle" : "secondary"} disabled={parentBusy} onClick={() => open("create_local")}>{t("ui.createLocalVault")}</button>}
@@ -86,9 +87,10 @@ export function LocalVaultTools({ status, profiles, source, onSource, onChanged,
         {action === "create_local" && <label>{t("ui.confirmMasterPassword")}<input type="password" value={confirmation} autoComplete="new-password"
           required onChange={(e) => setConfirmation(e.target.value)} disabled={busy} /></label>}
         {error && <p role="alert">{t(error)}</p>}
+        {hint && <p role="status" id="local-vault-hint">{t(hint)}</p>}
         <div className="discard-actions">
           <button type="button" className="secondary" disabled={busy} onClick={close}>{t("ui.cancel")}</button>
-          <button type="submit" className="primary" disabled={busy || (action !== "connect" && !password) || (action === "create_local" && (password.length < 12 || password !== confirmation || !name.trim())) || (action === "import_local" && !source)}>
+          <button type="submit" aria-describedby="local-vault-hint" title={hint ? t(hint) : undefined} className="primary" disabled={busy || (action !== "connect" && !password) || (action === "create_local" && (password.length < 12 || password !== confirmation || !name.trim())) || (action === "import_local" && !source)}>
             {busy ? t("ui.pleaseWait") : t(titles[action])}
           </button>
         </div>

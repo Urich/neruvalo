@@ -37,7 +37,7 @@ Object.defineProperties(HTMLDialogElement.prototype, {
 
 function button(label: string): HTMLButtonElement {
   const found = [...document.querySelectorAll("button")].find(
-    (node) => node.textContent?.trim() === label,
+    (node) => (node.getAttribute("aria-label") ?? node.textContent?.trim()) === label,
   );
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
@@ -171,6 +171,24 @@ describe("adding a record while a draft is open", () => {
       expected_revision: 3,
       data: { title: "Edited title" },
     });
+  });
+  it("disables saving until a record changes and after reverting it", async () => {
+    await click(document.querySelector<HTMLElement>(".record")!);
+    await click(button("Редактировать"));
+    expect(button("Зашифровать и сохранить").disabled).toBe(true);
+    await setTitle("Changed");
+    expect(button("Зашифровать и сохранить").disabled).toBe(false);
+    await setTitle("Saved record");
+    expect(button("Зашифровать и сохранить").disabled).toBe(true);
+  });
+  it("reveals and masks the password in a new entry", async () => {
+    await click(button("＋ Добавить запись"));
+    const input = document.querySelector<HTMLInputElement>(".password-generator-field input")!;
+    expect(input.type).toBe("password");
+    await click(button("Показать"));
+    expect(input.type).toBe("text");
+    await click(button("Скрыть"));
+    expect(input.type).toBe("password");
   });
   it("clears the confirmation and draft when the vault locks", async () => {
     await click(button("＋ Добавить запись"));

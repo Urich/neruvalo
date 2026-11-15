@@ -283,5 +283,17 @@
   "ui.theme.dark": "गहरी",
   "ui.theme.nord": "Nord",
   "ui.theme.dark-green": "गहरा हरा",
-  "ui.theme.solarized": "Solarized Light"
+  "ui.theme.solarized": "Solarized Light",
+  "ui.nameRequired": "Enter a vault name.",
+  "ui.passwordMinimum": "Master password: at least 12 characters.",
+  "ui.passwordMismatch": "Confirm the password; both passwords must match.",
+  "ui.noChanges": "No changes to save.",
+  "ui.customIcon": "Custom icon (PNG, JPEG or WebP, up to 128 KB)",
+  "ui.invalidIcon": "Choose a PNG, JPEG or WebP image up to 128 KB.",
+  "ui.removeIcon": "Remove icon",
+  "ui.createdDate": "Created",
+  "ui.modifiedDate": "Modified",
+  "ui.archivedDate": "Archived",
+  "ui.unknownDate": "Unknown",
+  "ui.actionUnavailable": "Action unavailable: check required fields, connection and synchronization."
 }

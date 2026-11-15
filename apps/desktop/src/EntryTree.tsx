@@ -1,3 +1,4 @@
+import { EntryIcon } from "./RecordIcon";
 import { useEffect, useRef, useState } from "react";
 import { Entry, types } from "./model";
 import { Group, TreeNode } from "./groups";
@@ -142,9 +143,7 @@ export function EntryTree({
               }
             >
               <span className="record-icon">
-                <Icon
-                  name={node.group ? "folder" : node.entry!.data.record_type}
-                />
+                <EntryIcon data={node.entry?.data} name={node.group ? "folder" : node.entry!.data.record_type} />
               </span>
               <span>
                 <strong>

@@ -37,6 +37,8 @@ npm run build
 
 System dependencies are required for the Tauri shell; consult the [run guide](docs/prototype.ru.md).
 
+В RustRover на Linux выберите конфигурацию **Build Desktop (Linux)** в списке запуска и нажмите **▶ Run**. Она установит npm-зависимости и соберёт приложение Tauri; результат — в `target/release/bundle`. Требуются Node.js/npm, Rust и системные зависимости Tauri. Конфигурация использует плагин **Shell Script** в IDE.
+
 ## Contributing and security
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Never commit real vault data, keys or recovery files.

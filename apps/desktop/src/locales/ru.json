@@ -283,5 +283,17 @@
   "ui.theme.dark": "Тёмная",
   "ui.theme.nord": "Nord",
   "ui.theme.dark-green": "Тёмно-зелёная",
-  "ui.theme.solarized": "Solarized Light"
+  "ui.theme.solarized": "Solarized Light",
+  "ui.nameRequired": "Укажите название хранилища.",
+  "ui.passwordMinimum": "Мастер-пароль: не менее 12 символов.",
+  "ui.passwordMismatch": "Подтвердите пароль: пароли должны совпадать.",
+  "ui.noChanges": "Нет изменений для сохранения.",
+  "ui.customIcon": "Своя иконка (PNG, JPEG или WebP, до 128 КБ)",
+  "ui.invalidIcon": "Выберите PNG, JPEG или WebP размером до 128 КБ.",
+  "ui.removeIcon": "Удалить иконку",
+  "ui.createdDate": "Создана",
+  "ui.modifiedDate": "Изменена",
+  "ui.archivedDate": "Перенесена в архив",
+  "ui.unknownDate": "Неизвестно",
+  "ui.actionUnavailable": "Действие недоступно: проверьте обязательные поля, подключение и синхронизацию."
 }
