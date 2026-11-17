@@ -1,19 +1,19 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Neruvalo</title>
+<link rel="stylesheet" href="/verification/themes.css">
 <style>
-:root{font-family:Inter,"Segoe UI",sans-serif;color:#233d36;background:#f8f9f6;font-size:14px;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0;padding:24px}main{max-width:500px;margin:0 auto;padding:24px;background:#fff;border:1px solid #dce3dd;border-radius:14px}h1{font-size:22px;margin:0 0 24px}p{line-height:1.6}#status{font-size:12px;color:#61746b;margin:16px 0 0}#status[data-error]{color:#a23f35}
-button{font:inherit;cursor:pointer;padding:11px 18px;border:0;border-radius:9px;background:#285e48;color:#fff;font-weight:600}button:hover{filter:brightness(.96)}button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible{outline:3px solid #8bb7a1;outline-offset:2px}
-#verification>p:first-child{margin-top:0;font-weight:600}#verification>img{display:block;margin:12px auto 20px;background:#f8f9f6;border:1px solid #e5ebe5;padding:6px}#verification>div{max-width:none!important}#verification>button{width:100%}
-#verification button[aria-pressed]{border-color:#e5ebe5!important;background:#f8f9f6!important;transition:border-color .12s,box-shadow .12s}#verification button[aria-pressed="true"]{border-color:#285e48!important;box-shadow:0 0 0 2px #dfece2}#verification button[aria-pressed]:hover{border-color:#8bb7a1!important}
-html.embedded{background:#fff}html.embedded body{padding:20px 24px}html.embedded main{padding:0;border:0;max-width:none}html.embedded h1{display:none}html.inline body{padding:8px}html.inline #status{margin-top:6px}html.inline label{margin:0}
+:root{font-family:Inter,"Segoe UI",sans-serif;color:var(--text);background:var(--canvas);font-size:14px;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0;padding:24px}main{max-width:500px;margin:0 auto;padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px}h1{font-size:22px;margin:0 0 24px}p{line-height:1.6}#status{font-size:12px;color:var(--muted);margin:16px 0 0}#status[data-error]{color:var(--error)}
+button{font:inherit;cursor:pointer;padding:11px 18px;border:0;border-radius:9px;background:var(--accent);color:var(--on-accent);font-weight:600}button:hover{filter:brightness(.96)}button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+html.embedded{background:var(--surface)}html.embedded body{padding:20px 24px}html.embedded main{padding:0;border:0;max-width:none}html.embedded h1{display:none}html.inline body{padding:8px}html.inline #status{margin-top:6px}html.inline label{margin:0}
 @media(max-width:380px){body,html.embedded body{padding:16px}main{padding:16px}}
 
-#verification>label{display:flex;align-items:center;gap:12px;min-height:44px;margin:0;padding:8px;color:#233d36;font-size:14px;font-weight:600;line-height:1.4;cursor:pointer}
-#verification input[type="checkbox"]{appearance:none;-webkit-appearance:none;display:inline-block;width:22px;height:22px;flex:0 0 22px;margin:0;border:1px solid #a8b9aa;border-radius:6px;background:#fff;cursor:pointer;transition:background-color .12s,border-color .12s}
-#verification>label:hover input{border-color:#5a8c75}
-#verification input[type="checkbox"]:checked{border-color:#285e48;background-color:#285e48;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Cpath d='m5 11 4 4 8-8' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
-#verification input[type="checkbox"]:focus-visible{outline:3px solid #8bb7a1;outline-offset:3px}
+#verification>label{display:flex;align-items:center;gap:12px;min-height:44px;margin:0;padding:8px;color:var(--text);font-size:14px;font-weight:600;line-height:1.4;cursor:pointer}
+#verification input[type="checkbox"]{appearance:none;-webkit-appearance:none;display:inline-block;width:22px;height:22px;flex:0 0 22px;margin:0;border:1px solid var(--faint);border-radius:6px;background:var(--surface);cursor:pointer;transition:background-color .12s,border-color .12s}
+#verification>label:hover input{border-color:var(--focus)}
+#verification input[type="checkbox"]:checked{border-color:var(--accent);background-color:var(--accent);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Cpath d='m5 11 4 4 8-8' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
+#verification input[type="checkbox"]:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
 @media(forced-colors:active){#verification input[type="checkbox"]{appearance:auto}}
+.gateveriq-slider{margin-inline:auto;--gateveriq-background:var(--surface);--gateveriq-text:var(--text);--gateveriq-muted:var(--muted);--gateveriq-border:var(--border);--gateveriq-surface:var(--secondary);--gateveriq-accent:var(--accent);--gateveriq-radius:9px}
 </style>
 <main><h1>Neruvalo</h1><div id="verification"></div><p id="status" role="status"></p></main>
 <script type="application/json" id="verification-messages">__VERIFICATION_MESSAGES__</script>
@@ -23,9 +23,11 @@ const bundle = JSON.parse(document.querySelector('#verification-messages').textC
 configureMessages(bundle);
 const params = new URLSearchParams(location.search);
 const locale = resolveLocale(null, params.get('lang') || 'en');
+const theme = params.get('theme');
+if (['light','dark','dark-green','nord','solarized'].includes(theme)) document.documentElement.dataset.theme = theme;
 const values = bundle.translations[locale];
 const t = Object.fromEntries(bundle.keys.map((key, index) => [key, values[index]]));
-const notify = (state) => { if (window.parent !== window) window.parent.postMessage({type:'neruvalo-verification', state}, '*'); };
+const notify = (state, details = {}) => { if (window.parent !== window) window.parent.postMessage({type:'neruvalo-verification', state, ...details}, '*'); };
 document.documentElement.lang = locale;
 document.documentElement.dir = locale === 'ar' ? 'rtl' : 'ltr';
 if(params.get('inline') === '1') document.documentElement.classList.add('inline');
@@ -35,16 +37,17 @@ const headers = {Authorization:`Bearer ${secret}`, 'Content-Type':'application/j
 const status = document.querySelector('#status');
 const verification = document.querySelector('#verification');
 new MutationObserver(() => {
-  if (verification.querySelector('button[aria-pressed]')) notify('visual');
+  if (verification.querySelector('.gateveriq-slider')) notify('visual');
 }).observe(verification, {childList:true, subtree:true});
 status.textContent = t.verificationPreparing;
 try {
   const r = await fetch('/api/v1/verification', {headers, cache:'no-store'});
   if (!r.ok) throw Error('VERIFICATION_EXPIRED');
   const p = await r.json();
+  notify('prepared', {expires_at:p.expires_at});
   if (!p.verified) {
     status.textContent = t.verificationPrompt;
-    const result = await verifyWebsiteAttempt(verification, p.attempt, {serviceURL:p.service_url, locale});
+    const result = await verifyWebsiteAttempt(verification, p.attempt, {serviceURL:p.service_url, locale, theme:getComputedStyle(document.documentElement).colorScheme === 'dark' ? 'dark' : 'light'});
     if (!result.verification_token) throw Error('VERIFICATION_FAILED');
     const done = await fetch('/api/v1/verification', {method:'POST', headers, body:JSON.stringify({verification_token:result.verification_token})});
     if (!done.ok) throw Error('VERIFICATION_FAILED');

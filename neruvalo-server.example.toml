@@ -1,0 +1,15 @@
+# Copy to neruvalo-server.toml. Paths are relative to the working directory.
+# The prototype accepts loopback connections only.
+dev_mode = true
+listen = "127.0.0.1:8787"
+database_url = "sqlite://local-data/server.sqlite3?mode=rwc"
+dev_outbox = "local-data/dev-outbox"
+
+# Uncomment the entire section to enable GateVeriq.
+# All five settings are required; keep the integration secret private.
+#[gateveriq]
+#id = "INTEGRATION_ID"
+#secret = "INTEGRATION_SECRET"
+#internal = "http://127.0.0.1:9081"
+#public = "http://127.0.0.1:9080"
+#origin = "http://127.0.0.1:8787"

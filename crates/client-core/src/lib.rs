@@ -446,6 +446,7 @@ impl Client {
         email: &str,
     ) -> Result<Value> {
         let server = normalize_server(server)?;
+        let login = normalize_login(login);
         ensure!(matches!(action, "login" | "register"), "INVALID_ACTION");
         let r = self
             .http
@@ -565,6 +566,13 @@ impl Client {
         with_recovery: bool,
     ) -> Result<Value> {
         self.lock();
+        let normalized_login = normalize_login(login);
+        let login = normalized_login.as_str();
+        ensure!(valid_account_login(login), "INVALID_LOGIN");
+        ensure!(
+            email.trim().contains('@') && email.trim().len() <= 254,
+            "INVALID_EMAIL"
+        );
         ensure!(
             password.len() >= 12,
             "Use a master password of at least 12 characters"
@@ -716,6 +724,8 @@ impl Client {
         password: Zeroizing<String>,
     ) -> Result<Value> {
         self.lock();
+        let normalized_login = normalize_login(login);
+        let login = normalized_login.as_str();
         let server = normalize_server(server)?;
         let info = self.info(&server).await?;
         let start = ClientLogin::<Suite>::start(&mut OsRng, password.as_bytes())

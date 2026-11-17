@@ -81,12 +81,25 @@ cd neruvalo
 PowerShell:
 
 ```powershell
-New-Item -ItemType Directory -Force local-data | Out-Null
-$env:NERUVALO_DEV_MODE = 'true'
-$env:DATABASE_URL = 'sqlite://local-data/server.sqlite3?mode=rwc'
-$env:NERUVALO_DEV_OUTBOX = 'local-data/dev-outbox'
-cargo run --locked -p neruvalo-server
+Copy-Item neruvalo-server.example.toml neruvalo-server.toml
+cargo run --locked -p neruvalo-server -- --config neruvalo-server.toml
 ```
+
+Настройки задаются в `neruvalo-server.toml`: `dev_mode`, `listen`,
+`database_url`, `dev_outbox` и необязательная секция `[gateveriq]`.
+Не перезаписывайте уже настроенный файл командой копирования. Сервер сам создаёт
+родительский каталог SQLite. Относительные пути считаются от рабочего каталога
+процесса, в том числе при передаче `--config /другой/каталог/server.toml`.
+Без аргумента `--config` автоматически читается `neruvalo-server.toml` из рабочего
+каталога. Явно указанный отсутствующий или ошибочный конфиг останавливает запуск.
+Переменные окружения не переопределяют конфиг. Старый способ через переменные
+сохранён только при отсутствии конфигурационного файла.
+
+В RustRover для `Run neruvalo-server` задайте рабочий каталог `$PROJECT_DIR$` и
+команду `run -p neruvalo-server -- --config neruvalo-server.toml`.
+Переменные окружения для этого запуска не нужны. Реальный конфиг может содержать
+секрет GateVeriq или пароль PostgreSQL; не добавляйте его в Git.
+Пример настройки проверки: [GateVeriq](gateveriq.md).
 
 Сервер слушает только `127.0.0.1:8787`. Код намеренно отказывается от внешнего listener, поскольку SMTP, CAPTCHA и производственная политика доступа ещё не реализованы. Не отключать эту защиту ради публикации прототипа в интернете.
 
@@ -94,24 +107,22 @@ cargo run --locked -p neruvalo-server
 
 ```powershell
 $databaseFile = Join-Path $PWD 'local-data/server.sqlite3'
-$env:DATABASE_URL = 'sqlite:' + [Uri]::EscapeDataString($databaseFile) + '?mode=rwc'
+'sqlite:' + [Uri]::EscapeDataString($databaseFile) + '?mode=rwc'
+# Сохраните полученное значение в database_url конфигурационного файла.
 ```
 
 ## Сервер на Linux
 
 ```bash
-mkdir -p local-data
 umask 077
-export NERUVALO_DEV_MODE=true
-export DATABASE_URL='sqlite://local-data/server.sqlite3?mode=rwc'
-export NERUVALO_DEV_OUTBOX='local-data/dev-outbox'
-cargo run --locked -p neruvalo-server
+cp neruvalo-server.example.toml neruvalo-server.toml
+cargo run --locked -p neruvalo-server -- --config neruvalo-server.toml
 ```
 
-Для PostgreSQL вместо SQLite укажите URL отдельной БД:
+Для PostgreSQL вместо SQLite укажите в конфиге URL отдельной БД:
 
-```bash
-export DATABASE_URL='postgres://neruvalo:YOUR_PASSWORD@127.0.0.1:5432/neruvalo'
+```toml
+database_url = "postgres://neruvalo:YOUR_PASSWORD@127.0.0.1:5432/neruvalo"
 ```
 
 Не публикуйте URL с паролем в issue, логи и репозиторий. OPAQUE setup и `server_id` сохраняются в таблице `metadata`: не удаляйте её при перезапуске.
@@ -169,7 +180,7 @@ npm run tauri -- dev --features desktop
 
 Использование:
 
-1. «Создать аккаунт», сервер `http://127.0.0.1:8787`, логин в нижнем регистре (латиница, цифры, `_`, `-`), email, мастер-пароль минимум 12 символов.
+1. «Создать аккаунт», сервер `http://127.0.0.1:8787`, логин из 3–40 латинских букв любого регистра, цифр, `_`, `-` (регистр не учитывается), email, мастер-пароль минимум 12 символов.
 2. Выбрать восстановление сертификатом либо отказаться от него.
 3. Найти указанный файл `<ticket>.txt` в dev-outbox сервера. Он имитирует письмо подтверждения. Скопировать значение после `Confirmation code:`.
 4. Подтвердить регистрацию и сохранить мастер-сертификат, если выбран. Файл не защищён паролем. Существующий файл не перезаписывается.

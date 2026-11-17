@@ -69,3 +69,33 @@ it("keeps failures blocked and offers retry", async () => {
   await act(async () => { await vi.advanceTimersByTimeAsync(400); });
   expect(host.querySelector("iframe")).not.toBeNull();
 });
+
+it("passes the resolved application theme into the isolated frame", async () => {
+  document.documentElement.dataset.theme = "dark-green";
+  await render();
+  expect(new URL(host.querySelector("iframe")!.src).searchParams.get("theme")).toBe("dark-green");
+  await act(async () => { document.documentElement.dataset.theme = "nord"; });
+  await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+  expect(new URL(host.querySelector("iframe")!.src).searchParams.get("theme")).toBe("nord");
+  await act(async () => { delete document.documentElement.dataset.theme; });
+});
+it("invalidates the proof at the backend deadline instead of a fixed three minutes", async () => {
+  await render();
+  const iframe = host.querySelector("iframe")!;
+  await act(async () => window.dispatchEvent(new MessageEvent("message", {
+    origin:"https://vault.example",source:iframe.contentWindow,
+    data:{type:"neruvalo-verification",state:"prepared",expires_at:Date.now()/1000+30},
+  })));
+  await message("verified");
+  expect(ready).toHaveBeenLastCalledWith(prepared.secret);
+  await act(async () => { await vi.advanceTimersByTimeAsync(28000); });
+  expect(ready).toHaveBeenLastCalledWith(null);
+});
+it("keeps a completed verification when only username case changes", async () => {
+  await render("Test1");
+  expect(native.invoke).toHaveBeenCalledWith("command", {request:{action:"prepare_verification",server:"https://vault.example",login:"test1",email:"",kind:"login"}});
+  await message("verified");
+  await render("TEST1");
+  expect(native.invoke).toHaveBeenCalledTimes(1);
+  expect(ready).toHaveBeenLastCalledWith(prepared.secret);
+});

@@ -29,6 +29,12 @@ pub(super) struct Proof(Value);
 fn unavailable() -> ApiError {
     ApiError(StatusCode::SERVICE_UNAVAILABLE, "VERIFICATION_UNAVAILABLE")
 }
+fn verification_failed() -> ApiError {
+    ApiError(StatusCode::UNAUTHORIZED, "VERIFICATION_FAILED")
+}
+fn verification_expired() -> ApiError {
+    ApiError(StatusCode::UNAUTHORIZED, "VERIFICATION_EXPIRED")
+}
 impl Gate {
     pub(super) async fn report(&self, proof: &Proof, success: bool) {
         let mut outcome = proof.0.clone();
@@ -42,53 +48,25 @@ impl Gate {
         }
     }
     pub(super) fn from_env() -> anyhow::Result<Option<Self>> {
-        let names = [
-            "NERUVALO_GATE_ID",
-            "NERUVALO_GATE_SECRET",
-            "NERUVALO_GATE_INTERNAL",
-            "NERUVALO_GATE_PUBLIC",
-            "NERUVALO_PUBLIC_ORIGIN",
-        ];
-        let values: Vec<_> = names.iter().map(|n| std::env::var(n).ok()).collect();
-        if values.iter().all(Option::is_none) {
-            return Ok(None);
-        }
-        ensure!(
-            values
-                .iter()
-                .all(|v| v.as_ref().is_some_and(|s| !s.is_empty())),
-            "All GateVeriq settings are required"
-        );
-        let v: Vec<_> = values.into_iter().map(Option::unwrap).collect();
-        for i in [2, 3, 4] {
-            let u = reqwest::Url::parse(&v[i])?;
-            ensure!(
-                u.scheme() == "https"
-                    || (u.scheme() == "http"
-                        && matches!(u.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))),
-                "GateVeriq URLs require HTTPS or loopback"
-            );
-            ensure!(
-                u.username().is_empty()
-                    && u.password().is_none()
-                    && u.query().is_none()
-                    && u.fragment().is_none()
-                    && u.path() == "/",
-                "Expected URL origin"
-            );
-        }
-        Ok(Some(Self {
+        crate::config::GateConfig::from_env()?
+            .as_ref()
+            .map(Self::from_config)
+            .transpose()
+    }
+    pub(super) fn from_config(config: &crate::config::GateConfig) -> anyhow::Result<Self> {
+        config.validate()?;
+        Ok(Self {
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
-            id: v[0].clone(),
-            secret: v[1].clone(),
-            internal: v[2].trim_end_matches('/').into(),
-            public: v[3].trim_end_matches('/').into(),
-            origin: v[4].trim_end_matches('/').into(),
+            id: config.id.clone(),
+            secret: config.secret.clone(),
+            internal: config.internal.trim_end_matches('/').into(),
+            public: config.public.trim_end_matches('/').into(),
+            origin: config.origin.trim_end_matches('/').into(),
             pending: Mutex::default(),
-        }))
+        })
     }
     async fn post(&self, path: &str, mut body: Value) -> Result<Value, ApiError> {
         body["integration_id"] = json!(self.id);
@@ -99,15 +77,45 @@ impl Gate {
             .json(&body)
             .send()
             .await
-            .map_err(|_| unavailable())?;
+            .map_err(|error| {
+                tracing::warn!(
+                    endpoint = path,
+                    timeout = error.is_timeout(),
+                    connect = error.is_connect(),
+                    "GateVeriq request failed"
+                );
+                unavailable()
+            })?;
         if !r.status().is_success() {
+            tracing::warn!(endpoint = path, status = %r.status(), "GateVeriq rejected request");
             return Err(unavailable());
         }
-        r.json().await.map_err(|_| unavailable())
+        r.json().await.map_err(|_| {
+            tracing::warn!(endpoint = path, "GateVeriq returned invalid JSON");
+            unavailable()
+        })
     }
 }
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route(
+            "/verification/themes.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css")],
+                    include_str!("../../../apps/desktop/src/themes.css"),
+                )
+            }),
+        )
+        .route(
+            "/verification/slider.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("verification/slider.js"),
+                )
+            }),
+        )
         .route(
             "/verification",
             get(|| async {
@@ -150,9 +158,9 @@ async fn status(State(s): State<Arc<AppState>>, h: HeaderMap) -> Api<Value> {
     let a = pending
         .get(bearer(&h)?)
         .filter(|a| a.expires > now())
-        .ok_or_else(auth_error)?;
+        .ok_or_else(verification_expired)?;
     Ok(Json(
-        json!({"verified":a.verified,"attempt":a.prepared,"service_url":g.public}),
+        json!({"verified":a.verified,"attempt":a.prepared,"service_url":g.public,"expires_at":a.expires}),
     ))
 }
 async fn complete(
@@ -165,11 +173,17 @@ async fn complete(
     let a = pending
         .get_mut(bearer(&h)?)
         .filter(|a| a.expires > now())
-        .ok_or_else(auth_error)?;
+        .ok_or_else(verification_expired)?;
     let result = g.post("/internal/v1/verifications/consume", json!({"action":a.action,"context_id":a.context,"request_id":a.request,"verification_token":r["verification_token"]})).await?;
-    if result["valid"] != true || result["action"] != a.action || result["context_id"] != a.context
+    if result["valid"] != true
+        || result["action"] != a.action
+        || result["context_id"] != a.context
+        || !matches!(
+            result["verification_method"].as_str(),
+            Some("pow" | "pow_visual")
+        )
     {
-        return Err(auth_error());
+        return Err(verification_failed());
     }
     a.verified = true;
     Ok(Json(json!({"verified":true})))
@@ -203,7 +217,8 @@ async fn protect(s: Arc<AppState>, req: Request, next: Next) -> Result<Response,
     let bytes = to_bytes(body, 2 * 1024 * 1024)
         .await
         .map_err(|_| invalid())?;
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    normalize_identity(&mut value);
     let hash = crypto::digest(&format!("{action}:{}", canonical_json(&value)));
     if let Some(token) = parts
         .headers
@@ -212,14 +227,16 @@ async fn protect(s: Arc<AppState>, req: Request, next: Next) -> Result<Response,
         .filter(|v| !v.is_empty())
     {
         let mut pending = g.pending.lock().await;
-        let a = pending
-            .get(token)
-            .filter(|a| {
-                a.expires > now()
-                    && a.verified
-                    && (a.hash == hash || a.hash == preparation_hash(action, &value))
-            })
-            .ok_or_else(auth_error)?;
+        let a = pending.get(token).ok_or_else(verification_expired)?;
+        if a.expires <= now() {
+            return Err(verification_expired());
+        }
+        if !a.verified
+            || a.action != action
+            || !(a.hash == hash || a.hash == preparation_hash(action, &value))
+        {
+            return Err(verification_failed());
+        }
         let outcome = json!({"action":a.action,"context_id":a.context,"request_id":a.request});
         pending.remove(token); // Spend before dispatch, including invalid business requests.
         drop(pending);
@@ -237,6 +254,8 @@ async fn protect(s: Arc<AppState>, req: Request, next: Next) -> Result<Response,
 }
 
 fn preparation_hash(action: &str, value: &Value) -> String {
+    let mut value = value.clone();
+    normalize_identity(&mut value);
     let identity = if action == "register" {
         json!({"login":value["login"], "email":value["email"]})
     } else {
@@ -245,10 +264,17 @@ fn preparation_hash(action: &str, value: &Value) -> String {
     crypto::digest(&format!("preflight:{action}:{}", canonical_json(&identity)))
 }
 
+fn normalize_identity(value: &mut Value) {
+    if let Some(login) = value["login"].as_str() {
+        value["login"] = json!(normalize_login(login));
+    }
+}
+
 async fn prepare(
     State(s): State<Arc<AppState>>,
-    Json(value): Json<Value>,
+    Json(mut value): Json<Value>,
 ) -> Result<Response, ApiError> {
+    normalize_identity(&mut value);
     let action = value["action"].as_str().ok_or_else(invalid)?;
     if !matches!(action, "login" | "register")
         || !value["login"]
@@ -275,7 +301,25 @@ async fn create_attempt(
     hash: String,
 ) -> Result<Response, ApiError> {
     rate(s, "verification").await?;
-    let context = crypto::token();
+    let issued = g
+        .post("/internal/v1/contexts", json!({"action":action}))
+        .await?;
+    let context = issued["context_id"]
+        .as_str()
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-.:".contains(&b))
+        })
+        .ok_or_else(unavailable)?
+        .to_owned();
+    let expires = issued["expires_at"]
+        .as_i64()
+        .filter(|expires| *expires > now())
+        .ok_or_else(unavailable)?
+        .min(now() + 180);
     // A server secret makes this mapping stable and opaque even for unknown logins.
     let identity = value[if action == "email_verify" {
         "ticket"
@@ -306,7 +350,7 @@ async fn create_attempt(
             request: crypto::token(),
             hash,
             prepared,
-            expires: now() + 180,
+            expires,
             verified: false,
         },
     );
@@ -329,10 +373,18 @@ mod tests {
     #[tokio::test]
     async fn verification_binds_request_accepts_pow_and_is_one_use() {
         let mock = Router::new()
+            .route("/internal/v1/contexts", post(|h: HeaderMap, Json(v): Json<Value>| async move {
+                assert_eq!(h["authorization"], "Bearer private-secret");
+                assert_eq!(v["integration_id"], "test");
+                assert!(matches!(v["action"].as_str(), Some("login" | "register")));
+                assert_eq!(v.as_object().unwrap().len(), 2);
+                Json(json!({"context_id":format!("mock-signed-{}", crypto::token()),"expires_at":now()+120}))
+            }))
             .route("/internal/v1/web/attempts", post(|h: HeaderMap, Json(v): Json<Value>| async move {
                 assert_eq!(h["authorization"], "Bearer private-secret");
                 assert!(v.get("email").is_none() && v.get("message").is_none());
                 assert_ne!(v["account_id"], "alice");
+                assert!(v["context_id"].as_str().unwrap().starts_with("mock-signed-"));
                 Json(json!({"decision":"verify","challenge":{"id":"mock"}}))
             }))
             .route("/internal/v1/verifications/consume", post(|Json(v): Json<Value>| async move {
@@ -340,14 +392,12 @@ mod tests {
             }))
             .route("/internal/v1/web/outcomes", post(|| async { Json(json!({})) }));
         let (internal, mock_task) = serve(mock).await;
-        let gate = Gate {
-            http: reqwest::Client::new(),
+        let gate = crate::config::GateConfig {
             internal,
             public: "http://127.0.0.1:9080".into(),
             origin: "http://127.0.0.1:8080".into(),
             id: "test".into(),
             secret: "private-secret".into(),
-            pending: Mutex::default(),
         };
         let outbox = std::env::temp_dir().join(format!("neruvalo-gate-test-{}", Uuid::new_v4()));
         std::fs::create_dir(&outbox).unwrap();
@@ -358,11 +408,13 @@ mod tests {
             .bytes()
             .map(|b| format!("%{b:02X}"))
             .collect();
-        let app = application_with_gate(
-            &format!("sqlite:{encoded}?mode=rwc"),
-            outbox.clone(),
-            Some(gate),
-        )
+        let app = application_with_config(&crate::config::ServerConfig {
+            dev_mode: true,
+            database_url: format!("sqlite:{encoded}?mode=rwc"),
+            dev_outbox: outbox.clone(),
+            gateveriq: Some(gate),
+            ..crate::config::ServerConfig::default()
+        })
         .await
         .unwrap();
         let (url, task) = serve(app).await;
@@ -377,6 +429,16 @@ mod tests {
             .unwrap();
         assert!(!page.contains("__VERIFICATION_MESSAGES__"));
         assert!(page.contains("incorrectPasswordOrDamagedData") && page.contains("translations"));
+        assert!(page.contains("/verification/themes.css") && page.contains(".gateveriq-slider"));
+        for asset in ["slider.js", "worker.js", "widget.js", "themes.css"] {
+            assert!(http
+                .get(format!("{url}/verification/{asset}"))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .is_success());
+        }
         let endpoint = format!("{url}/api/v1/register/begin");
         let body = json!({"login":"alice","email":"a@example.test","message":"invalid"});
         let r = http.post(&endpoint).json(&body).send().await.unwrap();
@@ -452,7 +514,7 @@ mod tests {
         for action in ["register", "login"] {
             let r = http
                 .post(format!("{url}/api/v1/verification/prepare"))
-                .json(&json!({"action":action,"login":"alice","email":"a@example.test"}))
+                .json(&json!({"action":action,"login":"AlIcE","email":"a@example.test"}))
                 .send()
                 .await
                 .unwrap();

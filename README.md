@@ -35,6 +35,18 @@ npm test
 npm run build
 ```
 
+To run the server without environment variables, copy
+`neruvalo-server.example.toml` to `neruvalo-server.toml`, edit its settings, then run:
+
+```bash
+cargo run --locked -p neruvalo-server -- --config neruvalo-server.toml
+```
+
+The server also discovers `neruvalo-server.toml` in its working directory.
+Relative data paths use that working directory. Keep the real config private.
+GateVeriq settings belong in its optional `[gateveriq]` section;
+see [integration instructions](docs/gateveriq.md).
+
 System dependencies are required for the Tauri shell; consult the [run guide](docs/prototype.ru.md).
 
 В RustRover на Linux выберите конфигурацию **Build Desktop (Linux)** в списке запуска и нажмите **▶ Run**. Она установит npm-зависимости и соберёт приложение Tauri; результат — в `target/release/bundle`. Требуются Node.js/npm, Rust и системные зависимости Tauri. Конфигурация использует плагин **Shell Script** в IDE.

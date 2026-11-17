@@ -305,13 +305,9 @@ impl Client {
         Ok(json!({"incoming":incoming,"outgoing":state["outgoing"]}))
     }
     pub async fn resolve_recipient(&mut self, login: &str) -> Result<Value> {
-        ensure!(
-            login.len() <= 40
-                && login
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
-            "INVALID_LOGIN"
-        );
+        let normalized_login = normalize_login(login);
+        let login = normalized_login.as_str();
+        ensure!(valid_account_login(login), "INVALID_LOGIN");
         let http = self.http.clone();
         let a = self.unlocked()?;
         ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");

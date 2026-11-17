@@ -2895,6 +2895,7 @@ dependencies = [
  "rqrr",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "tempfile",
  "tokio",
@@ -2953,6 +2954,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "clap",
  "neruvalo-crypto",
  "neruvalo-protocol",
  "opaque-ke",
@@ -2961,6 +2963,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "uuid",

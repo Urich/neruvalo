@@ -1163,3 +1163,63 @@ async fn incompatible_server_payload_blocks_login_and_locks_sync() {
     assert_eq!(fresh.status()["unlocked"], true);
     task.abort();
 }
+
+#[tokio::test]
+async fn account_logins_ignore_ascii_case_everywhere() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (server, task) = start(root).await;
+    let mut client = Client::new(root.join("case-client")).unwrap();
+    register(&mut client, &server, "Test1", root).await;
+    for login in ["test1", "TEST1", "TeSt1"] {
+        client.login(&server, login, password()).await.unwrap();
+        assert_eq!(client.status()["login"], "test1");
+    }
+    assert_eq!(client.profiles().await.unwrap().len(), 1);
+    let http = reqwest::Client::new();
+    // Raw API clients must get the same behavior, independently of Rust client normalization.
+    let duplicate = http.post(format!("{server}/api/v1/register/begin"))
+        .json(&serde_json::json!({"login":"tEsT1","email":"different@example.test","message":"unused"}))
+        .send().await.unwrap();
+    assert_eq!(duplicate.status(), 409);
+    let start = opaque_ke::ClientLogin::<crypto::Suite>::start(
+        &mut opaque_ke::rand::rngs::OsRng,
+        password().as_bytes(),
+    )
+    .unwrap();
+    let challenge: Value = http
+        .post(format!("{server}/api/v1/auth/begin"))
+        .json(
+            &serde_json::json!({"login":"TEST1","message":crypto::b64(start.message.serialize())}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let profile_id = client.profiles().await.unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let profile: Profile = serde_json::from_slice(
+        &std::fs::read(
+            root.join("case-client")
+                .join(profile_id)
+                .join("profile.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(challenge["account_id"], profile.account_id);
+    // Existing lowercase accounts remain reachable, including recipient identity pinning.
+    register(&mut client, &server, "other2", root).await;
+    client.login(&server, "OTHER2", password()).await.unwrap();
+    let recipient = client.resolve_recipient("TeSt1").await.unwrap();
+    assert_eq!(recipient["login"], "test1");
+    assert_eq!(
+        client.resolve_recipient("TEST1").await.unwrap()["id"],
+        recipient["id"]
+    );
+    task.abort();
+}

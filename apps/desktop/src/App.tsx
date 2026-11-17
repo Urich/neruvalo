@@ -1396,7 +1396,9 @@ export default function App() {
                             value={login}
                             onChange={(e) => setLogin(e.target.value)}
                             autoComplete="username"
+                            aria-describedby={mode === "register" ? "registration-login-help" : undefined}
                           />
+                          {mode === "register" && <small id="registration-login-help">{t("ui.loginRequirements")}</small>}
                         </label>
                       </>
                     )}

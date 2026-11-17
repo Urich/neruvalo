@@ -4,6 +4,18 @@ use serde_json::Value;
 pub const PROTOCOL_VERSION: u32 = 2;
 pub const PROFILE: &str = "opaque-ristretto255-sha512-argon2id-m65536-t3-p1-v1";
 
+/// Account names use one canonical spelling for lookup, verification and storage.
+pub fn normalize_login(login: &str) -> String {
+    login.to_ascii_lowercase()
+}
+
+pub fn valid_account_login(login: &str) -> bool {
+    (3..=40).contains(&login.len())
+        && login
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub server_id: String,
@@ -184,4 +196,21 @@ pub use sharing::*;
 pub struct ImportVault {
     pub operation_id: String,
     pub versions: Vec<StoredVersion>,
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::*;
+
+    #[test]
+    fn account_names_ignore_case_without_relaxing_other_constraints() {
+        for name in ["Test1", "TEST1", "test1"] {
+            assert!(valid_account_login(name));
+            assert_eq!(normalize_login(name), "test1");
+        }
+        for invalid in ["ab", "Test 1", "Тест1", "test@example.test", " test1"] {
+            assert!(!valid_account_login(invalid));
+        }
+        assert!(!valid_account_login(&"A".repeat(41)));
+    }
 }

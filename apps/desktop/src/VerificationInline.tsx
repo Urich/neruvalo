@@ -8,22 +8,30 @@ export function VerificationInline({ server, login, email, kind, onReady }: {
   onReady: (secret: string | null) => void;
 }) {
   const { t, language } = useI18n();
+  const normalizedLogin = login.toLowerCase();
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [error, setError] = useState(false);
   const [visual, setVisual] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [theme, setTheme] = useState(document.documentElement.dataset.theme || "light");
   const frame = useRef<HTMLIFrameElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const ready = useRef(onReady);
   ready.current = onReady;
 
   useEffect(() => {
+    const observer = new MutationObserver(() => setTheme(document.documentElement.dataset.theme || "light"));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     let active = true;
     let expiry: ReturnType<typeof setTimeout>;
     setPrepared(null); setError(false); setVisual(false); ready.current(null);
-    if (!URL.canParse(server) || !login || (kind === "register" && !email)) return;
+    if (!URL.canParse(server) || !normalizedLogin || (kind === "register" && !email)) return;
     const timer = setTimeout(() => {
-      void invoke<Prepared>("command", {request: {action: "prepare_verification", server, login, email, kind}})
+      void invoke<Prepared>("command", {request: {action: "prepare_verification", server, login: normalizedLogin, email, kind}})
         .then((result) => {
           if (!active) return;
           if (!result || (result.enabled && (!result.url || !result.secret))) throw Error("Invalid verification");
@@ -35,20 +43,27 @@ export function VerificationInline({ server, login, email, kind, onReady }: {
         }).catch(() => { if (active) setError(true); });
     }, 400);
     return () => { active = false; clearTimeout(timer); clearTimeout(expiry); };
-  }, [server, login, email, kind, revision, language]);
+  }, [server, normalizedLogin, email, kind, revision, language, theme]);
 
   useEffect(() => {
     if (!prepared?.url) return;
     const origin = new URL(prepared.url).origin;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || event.origin !== origin ||
         event.data?.type !== "neruvalo-verification") return;
+      if (event.data.state === "prepared" && Number.isFinite(event.data.expires_at)) {
+        clearTimeout(deadline);
+        deadline = setTimeout(() => {
+          ready.current(null); setPrepared(null); setVisual(false); setRevision((value) => value + 1);
+        }, Math.max(0, event.data.expires_at * 1000 - Date.now() - 2000));
+      }
       if (event.data.state === "visual") setVisual(true);
       if (event.data.state === "verified") { ready.current(prepared.secret!); setVisual(false); }
       if (event.data.state === "error") { ready.current(null); setError(true); }
     };
     window.addEventListener("message", receive);
-    return () => window.removeEventListener("message", receive);
+    return () => { clearTimeout(deadline); window.removeEventListener("message", receive); };
   }, [prepared]);
 
   useEffect(() => {
@@ -64,6 +79,7 @@ export function VerificationInline({ server, login, email, kind, onReady }: {
   if (url) {
     url.searchParams.set("embedded", "1"); url.searchParams.set("inline", "1");
     url.searchParams.set("lang", language);
+    url.searchParams.set("theme", theme);
   }
   const retry = () => { ready.current(null); setRevision((value) => value + 1); };
   return <div className="verification-inline">

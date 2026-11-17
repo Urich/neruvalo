@@ -15,7 +15,7 @@ pub(super) async fn resolve(
     let actor = account(&s, &h).await?;
     rate(&s, &format!("resolve:{actor}")).await?;
     let r = sqlx::query("SELECT id,login,bundle FROM accounts WHERE login=$1")
-        .bind(login)
+        .bind(normalize_login(&login))
         .fetch_optional(&s.pool)
         .await?
         .ok_or(ApiError(StatusCode::NOT_FOUND, "ACCOUNT_NOT_FOUND"))?;

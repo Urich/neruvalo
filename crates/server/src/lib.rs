@@ -1,3 +1,4 @@
+pub mod config;
 mod local_import;
 mod sharing;
 mod verification;
@@ -98,14 +99,18 @@ fn decode<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, ApiError> {
 fn ser<T: serde::Serialize>(v: &T) -> Result<String, ApiError> {
     serde_json::to_string(v).map_err(|_| invalid())
 }
-fn login_valid(s: &str) -> bool {
-    (3..=40).contains(&s.len())
-        && s.bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
-}
-
 pub async fn application(url: &str, outbox: PathBuf) -> anyhow::Result<Router> {
     application_with_gate(url, outbox, verification::Gate::from_env()?).await
+}
+pub async fn application_with_config(config: &config::ServerConfig) -> anyhow::Result<Router> {
+    config.validate()?;
+    let gate = config
+        .gateveriq
+        .as_ref()
+        .map(verification::Gate::from_config)
+        .transpose()?;
+    config.prepare_directories()?;
+    application_with_gate(&config.database_url, config.dev_outbox.clone(), gate).await
 }
 async fn application_with_gate(
     url: &str,
@@ -259,9 +264,13 @@ async fn register_begin(
     Json(mut r): Json<RegisterBegin>,
 ) -> Api<RegisterChallenge> {
     rate(&s, "registration").await?;
+    r.login = normalize_login(&r.login);
     r.email = r.email.trim().to_lowercase();
-    if !login_valid(&r.login) || !r.email.contains('@') || r.email.len() > 254 {
-        return Err(invalid());
+    if !valid_account_login(&r.login) {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "INVALID_LOGIN"));
+    }
+    if !r.email.contains('@') || r.email.len() > 254 {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "INVALID_EMAIL"));
     }
     if sqlx::query("SELECT id FROM accounts WHERE login=$1 OR email=$2")
         .bind(&r.login)
@@ -380,8 +389,9 @@ fn params<'a>(account: &'a str, server: &'a str) -> ServerLoginParameters<'a, 'a
 async fn auth_begin(
     State(s): State<Arc<AppState>>,
     proof: Option<axum::Extension<verification::Proof>>,
-    Json(r): Json<LoginBegin>,
+    Json(mut r): Json<LoginBegin>,
 ) -> Api<LoginChallenge> {
+    r.login = normalize_login(&r.login);
     rate(&s, &format!("login:{}", r.login)).await?;
     let row = sqlx::query("SELECT id,registration FROM accounts WHERE login=$1")
         .bind(&r.login)

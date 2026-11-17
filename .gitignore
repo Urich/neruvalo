@@ -9,6 +9,8 @@ dist/
 .env
 .env.*
 !.env.example
+/neruvalo-server.toml
+*.toml.before-gateveriq
 *.sqlite
 *.sqlite3
 *.sqlite-wal

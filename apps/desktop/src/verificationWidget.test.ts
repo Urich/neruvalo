@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 // @ts-expect-error The upstream browser module is plain JavaScript.
-import { activationLabel, collectBehavior, configureMessages, GateveriqWidget, selectImages } from "../../../crates/server/src/verification/widget.js";
+import { activationLabel, collectBehavior, configureMessages, GateveriqWidget, selectSlider, verifyVisual } from "../../../crates/server/src/verification/widget.js";
 import bundle from "../../../crates/server/src/verification/messages.json";
 import { languages, translate } from "./i18n";
 it("labels the real widget checkbox in every application language", async () => {
@@ -36,7 +36,7 @@ it("labels the real widget checkbox in every application language", async () => 
 });
 
 afterEach(() => vi.unstubAllGlobals());
-it("localizes PoW success, errors and image controls in all eleven languages", async () => {
+it("localizes PoW success, errors and slider controls in all eleven languages", async () => {
   configureMessages(bundle);
   class WorkerMock {
     onmessage?: (event: unknown) => void;
@@ -58,9 +58,60 @@ it("localizes PoW success, errors and image controls in all eleven languages", a
     await expect(widget.verify({}, {locale,signal:controller.signal})).rejects.toThrow();
     expect(element.textContent).toBe(translate("ui.verificationFailed", locale));
     const visualController = new AbortController();
-    const selection = selectImages(element, {instruction_key:"match_reference",reference:"ref",images:["image"],expires_at:Date.now()/1000+60}, visualController.signal, "", {locale});
-    expect(element.querySelector("p")!.textContent).toBe(translate("ui.verificationVisualInstruction", locale));
-    expect(element.querySelector('button[aria-pressed]')!.getAttribute("aria-label")).toBe(translate("ui.verificationImage",locale)+" 1");
+    const selection = selectSlider(element, {kind:"slider_puzzle",width:280,height:140,piece_size:40,max_position:240,piece_y:20,background:"data:image/png;base64,YQ==",piece:"data:image/png;base64,Yg==",expires_at:Date.now()/1000+60}, visualController.signal, "", {locale,theme:"dark"});
+    const slider = element.querySelector(".gateveriq-slider")!;
+    expect(slider.getAttribute("data-theme")).toBe("dark");
+    const shadow = slider.shadowRoot!;
+    expect(shadow.querySelector(".heading")!.textContent).toBe(translate("ui.verificationSliderInstruction", locale));
+    expect(shadow.querySelector('input[type="range"]')!.getAttribute("aria-label")).toBe(translate("ui.verificationSliderPosition",locale));
     visualController.abort(); await expect(selection).rejects.toThrow();
   }
+});
+
+it("submits the slider with keyboard and respects image loading", async () => {
+  configureMessages(bundle);
+  const element = document.createElement("div");
+  const selection = selectSlider(element, {kind:"slider_puzzle",width:280,height:140,piece_size:40,max_position:240,piece_y:20,background:"data:image/png;base64,YQ==",piece:"data:image/png;base64,Yg==",expires_at:Date.now()/1000+60}, new AbortController().signal, "", {locale:"ru"});
+  const shadow = element.querySelector(".gateveriq-slider")!.shadowRoot!;
+  const range = shadow.querySelector<HTMLInputElement>('input[type="range"]')!;
+  expect(range.disabled).toBe(true);
+  for (const image of shadow.querySelectorAll("img")) image.dispatchEvent(new Event("load"));
+  expect(range.disabled).toBe(false);
+  range.value = "120"; range.dispatchEvent(new Event("input"));
+  range.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter"}));
+  await expect(selection).resolves.toBe(120);
+});
+
+it("retries a rejected slider task and submits the replacement task to the current API", async () => {
+  configureMessages(bundle);
+  class WorkerMock {
+    onmessage?: (event: unknown) => void;
+    postMessage() { queueMicrotask(() => this.onmessage?.({data:{nonce:"proof"}})); }
+    terminate() {}
+  }
+  vi.stubGlobal("Worker", WorkerMock);
+  const visual = {kind:"slider_puzzle",task_id:"first",max_attempts:3,width:280,height:140,piece_size:40,max_position:240,piece_y:20,background:"data:image/png;base64,YQ==",piece:"data:image/png;base64,Yg==",expires_at:Date.now()/1000+60};
+  const fetch = vi.fn()
+    .mockResolvedValueOnce({ok:false,json:async () => ({error:{code:"INVALID_VISUAL_SOLUTION"},visual:{...visual,task_id:"replacement"}})})
+    .mockResolvedValueOnce({ok:true,json:async () => ({verification_token:"verified"})});
+  vi.stubGlobal("fetch", fetch);
+  const element = document.createElement("div");
+  const result = verifyVisual(element, {challenge_id:"challenge"}, visual, {serviceURL:"https://gate.example",locale:"ru",theme:"dark"});
+  const submit = (position: number) => {
+    const shadow = element.querySelector(".gateveriq-slider")!.shadowRoot!;
+    for (const image of shadow.querySelectorAll("img")) image.dispatchEvent(new Event("load"));
+    const range = shadow.querySelector<HTMLInputElement>("input")!;
+    range.value = String(position); range.dispatchEvent(new Event("input"));
+    range.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter"}));
+  };
+  const first = element.querySelector(".gateveriq-slider");
+  submit(120);
+  await vi.waitFor(() => expect(element.querySelector(".gateveriq-slider")).not.toBe(first));
+  submit(180);
+  await expect(result).resolves.toEqual({decision:"verified",verification_token:"verified"});
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(String(fetch.mock.calls[0][0])).toBe("https://gate.example/public/v1/web/visual/solutions");
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({challenge_id:"challenge",task_id:"first",nonce:"proof",position:120});
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({challenge_id:"challenge",task_id:"replacement",nonce:"proof",position:180});
+  expect(element.querySelector(".gateveriq-slider")!.shadowRoot!.textContent).toContain(translate("ui.verificationCompleted","ru"));
 });

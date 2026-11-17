@@ -65,3 +65,13 @@ describe("vault format errors", () => {
     expect(isUnsupportedVaultFormat(error)).toBe(false);
   });
 });
+
+it.each([
+  ["VERIFICATION_EXPIRED", "ui.verificationExpired"],
+  ["VERIFICATION_FAILED", "ui.verificationFailed"],
+  ["INVALID_LOGIN", "ui.loginRequirements"],
+  ["INVALID_EMAIL", "ui.invalidEmail"],
+  ["AUTH_FAILED", "ui.signInFailedCheckYourUsernameAndPassword"],
+])("distinguishes verification and account form errors: %s", (error, message) => {
+  expect(errorText(error)).toBe(message);
+});

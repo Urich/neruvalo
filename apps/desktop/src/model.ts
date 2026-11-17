@@ -179,6 +179,8 @@ export function errorText(error: unknown): string {
     [/ONLINE_LOGIN_REQUIRED|LOCAL_PROFILE_REQUIRED/, "onlineLoginRequired"],
     [/SAVE_RESULT_UNKNOWN/, "saveResultUnknown"],
     [/VERIFICATION_EXPIRED/, "verificationExpired"],
+    [/INVALID_LOGIN/, "loginRequirements"],
+    [/INVALID_EMAIL\b/, "invalidEmail"],
     [/VERIFICATION_CANCELLED/, "verificationCancelled"],
     [/VERIFICATION_|Missing verification token|Worker failed/, "verificationFailed"],
     [/ACCESS_DENIED|FORBIDDEN/, "accessDenied"],
