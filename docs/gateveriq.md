@@ -13,7 +13,8 @@ The script pulls `ghcr.io/urich/gateveriq:v0.2.0`, creates the
 `neruvalo-gateveriq` container with a persistent `neruvalo-gateveriq-data` volume,
 and publishes ports 9080 and 9081 on host loopback. It creates a website
 integration for Neruvalo's configured listener with actions `register,login`,
-sets both visual policies to `adaptive`, updates `[gateveriq]` in
+sets both visual policies to `adaptive` and configures a three-failure account
+threshold in GateVeriq. It updates `[gateveriq]` in
 `neruvalo-server.toml`, and prints the integration ID and secret. Restart the
 Neruvalo server afterward. Docker access uses sudo if required; run the script
 as your normal user so the server config stays owned by you.
@@ -71,27 +72,38 @@ Legacy environment-only launchers still work when no config file is present:
 
 Use the actual Neruvalo browser origin (including port). Create a website-mode
 GateVeriq integration with that exact origin and actions `register,login`.
-Set both visual policies to `adaptive`, using `integration-visual-policy --id ID
---action ACTION --visual adaptive`. Rerun `installer/setup-gateveriq.ps1` to update
-an existing local integration; it reuses saved credentials.
+Set both actions to `adaptive` with
+`integration-visual-policy --id ID --action ACTION --visual adaptive`.
+In GateVeriq's own configuration, set `account_failure_limit = 3` under
+`[website]`, then restart GateVeriq. This setting applies to both actions,
+with a separate failure count for each account and action. To update a local
+integration, rerun the setup script for your platform. The Docker script
+restarts GateVeriq when the configuration changes. On Windows, restart
+GateVeriq if the setup script asks you to.
 The backend obtains a signed context from `/internal/v1/contexts` before
 creating `/internal/v1/web/attempts`, as required by GateVeriq v0.2.0. A locally
 generated random context is rejected as `INVALID_CONTEXT`.
 The internal API and integration secret belong on the backend.
 Use HTTPS outside loopback development. Keep the internal listener private.
 
-The desktop client prepares a check after the user enters the server and login
-(and email for registration). The GateVeriq checkbox appears below the password.
-The submit button becomes available after verification. The slider puzzle opens in a modal
-only when GateVeriq requests it; the same frame stays mounted during this
-transition. The application language is passed as the widget locale.
+For registration, the desktop shows the verification frame below **Create account**
+after the user selects it. Verification is bound to the submitted registration
+request. After three failed registration requests for the same login within
+the history window, the next registration attempt gets a slider. GateVeriq can
+also request a slider earlier based on browser risk signals.
+
+For login, the desktop prepares a check after the user enters the server and
+login. The checkbox appears below the password and enables submission when
+verification succeeds. The slider opens in a modal when GateVeriq requests it.
+The application language is passed as the widget locale.
 
 Frames are sandboxed without Tauri capabilities, popups, forms or top navigation.
 Frame messages are checked against both origin and source; only the backend can
-accept the GateVeriq token. Prepared checks expire after at most three minutes (and no later than the
-GateVeriq context deadline), are bound
-to the action and login (plus email for registration), and are consumed before
-dispatch. Changing these fields resets the check. Failures require a fresh check.
+accept the GateVeriq token. Checks expire after at most three minutes or at
+the GateVeriq context deadline, whichever comes first. The inline login check
+is bound to the login, and the registration check is bound to the submitted
+request. The server consumes the check before dispatch. Cancelling the
+registration check ends the attempt. To try again, select **Create account**.
 The password and OPAQUE message are created separately and are never sent to
 GateVeriq. Offline unlocking requires no verification.
 

@@ -37,6 +37,37 @@ function Invoke-Gate {
     return ($result -join "`n")
 }
 
+function Set-GateAccountFailureLimit {
+    $source = [IO.File]::ReadAllText($GateConfig)
+    $newline = if ($source.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $setting = 'account_failure_limit = 3'
+    $sectionPattern = '(?ms)^(?<header>[ \t]*\[website\][ \t]*(?:#[^\r\n]*)?)(?:\r?\n|\z)(?<body>.*?)(?=^[ \t]*\[|\z)'
+    $section = [regex]::Match($source, $sectionPattern)
+    if ($section.Success) {
+        $body = $section.Groups['body'].Value
+        $limitPattern = [regex]'(?m)^[ \t]*account_failure_limit[ \t]*=[ \t]*[0-9_]+'
+        $updatedBody = if ($limitPattern.IsMatch($body)) {
+            $limitPattern.Replace($body, $setting, 1)
+        } else {
+            $setting + $newline + $body
+        }
+        $updated = $source.Substring(0, $section.Index) + $section.Groups['header'].Value + $newline +
+            $updatedBody + $source.Substring($section.Index + $section.Length)
+    } else {
+        $updated = $source.TrimEnd() + $newline + $newline + '[website]' + $newline + $setting + $newline
+    }
+    if ($updated -eq $source) { return }
+
+    $temporary = "$GateConfig.$([Guid]::NewGuid()).tmp"
+    try {
+        [IO.File]::WriteAllText($temporary, $updated, [Text.UTF8Encoding]::new($false))
+        [IO.File]::Replace($temporary, $GateConfig, $null)
+    } finally {
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
+    Write-Host 'Restart GateVeriq to load the account failure limit of 3.'
+}
+
 Push-Location -LiteralPath $GateDirectory
 try {
     if (Test-Path -LiteralPath $credentialsPath) {
@@ -66,12 +97,12 @@ try {
     }
 
     foreach ($action in @('register', 'login')) {
-        $policy = 'adaptive'
         Invoke-Gate -GateArguments @(
             'integration-visual-policy', '--id', $integration.integration_id,
-            '--action', $action, '--visual', $policy
+            '--action', $action, '--visual', 'adaptive'
         ) | Out-Null
     }
+    Set-GateAccountFailureLimit
 } finally {
     Pop-Location
 }

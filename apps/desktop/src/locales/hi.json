@@ -206,6 +206,7 @@
   "ui.thisAccountOrRecoveryFileBelongsToAnotherServer": "यह खाता या पुनर्प्राप्ति फ़ाइल किसी अन्य सर्वर की है।",
   "ui.anAccountWithThisUsernameOrEmailAlreadyExists": "इस उपयोगकर्ता नाम या ईमेल से खाता पहले से मौजूद है।",
   "ui.invalidOrExpiredVerificationCode": "सत्यापन कोड अमान्य है या समाप्त हो गया है।",
+  "ui.registrationRestartRequired": "पंजीकरण की समय-सीमा समाप्त हो गई या कोड तीन बार गलत दर्ज किया गया। फ़ॉर्म फिर से भरें।",
   "ui.tooManyRequestsTryAgainLater": "बहुत अधिक अनुरोध। बाद में प्रयास करें।",
   "ui.serverIdentityOrAccountKeysChangedSignInStopped": "सर्वर की पहचान या खाता कुंजियाँ बदल गईं। साइन इन रोका गया।",
   "ui.serverOrDataVersionIsNotSupported": "सर्वर या डेटा संस्करण समर्थित नहीं है।",

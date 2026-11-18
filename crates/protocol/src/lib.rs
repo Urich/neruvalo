@@ -63,6 +63,9 @@ pub struct RegisterFinish {
     pub message: String,
     pub bundle: AccountBundle,
 }
+pub const REGISTRATION_CODE_ATTEMPTS_EXHAUSTED: &str = "REGISTRATION_CODE_ATTEMPTS_EXHAUSTED";
+pub const REGISTRATION_EXPIRED: &str = "REGISTRATION_EXPIRED";
+
 #[derive(Serialize, Deserialize)]
 pub struct LoginBegin {
     pub login: String,

@@ -206,6 +206,7 @@
   "ui.thisAccountOrRecoveryFileBelongsToAnotherServer": "Ce compte ou fichier de récupération appartient à un autre serveur.",
   "ui.anAccountWithThisUsernameOrEmailAlreadyExists": "Un compte avec cet identifiant ou e-mail existe déjà.",
   "ui.invalidOrExpiredVerificationCode": "Code de vérification invalide ou expiré.",
+  "ui.registrationRestartRequired": "L’inscription a expiré ou le code a été saisi trois fois de manière incorrecte. Remplissez à nouveau le formulaire.",
   "ui.tooManyRequestsTryAgainLater": "Trop de requêtes. Réessayez plus tard.",
   "ui.serverIdentityOrAccountKeysChangedSignInStopped": "L’identité du serveur ou les clés ont changé. Connexion arrêtée.",
   "ui.serverOrDataVersionIsNotSupported": "Version du serveur ou des données non prise en charge.",

@@ -372,6 +372,8 @@ mod tests {
     }
     #[tokio::test]
     async fn verification_binds_request_accepts_pow_and_is_one_use() {
+        let failed_registrations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reported = failed_registrations.clone();
         let mock = Router::new()
             .route("/internal/v1/contexts", post(|h: HeaderMap, Json(v): Json<Value>| async move {
                 assert_eq!(h["authorization"], "Bearer private-secret");
@@ -390,7 +392,15 @@ mod tests {
             .route("/internal/v1/verifications/consume", post(|Json(v): Json<Value>| async move {
                 Json(json!({"valid":v["verification_token"] != "invalid","action":v["action"],"context_id":v["context_id"],"verification_method":if v["verification_token"] == "visual" {"pow_visual"} else {"pow"}}))
             }))
-            .route("/internal/v1/web/outcomes", post(|| async { Json(json!({})) }));
+            .route("/internal/v1/web/outcomes", post(move |Json(outcome): Json<Value>| {
+                let reported = reported.clone();
+                async move {
+                    assert_eq!(outcome["action"], "register");
+                    assert_eq!(outcome["success"], false);
+                    reported.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Json(json!({}))
+                }
+            }));
         let (internal, mock_task) = serve(mock).await;
         let gate = crate::config::GateConfig {
             internal,
@@ -500,6 +510,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.status(), StatusCode::BAD_REQUEST); // Gate accepted; invalid OPAQUE message rejected.
+        assert_eq!(
+            failed_registrations.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
         assert_eq!(
             http.post(&endpoint)
                 .header("x-neruvalo-verification", secret)

@@ -18,6 +18,8 @@ IMAGE = 'ghcr.io/urich/gateveriq:v0.2.0'
 LABEL = 'org.neruvalo.setup'
 LABEL_VALUE = 'gateveriq-v1'
 STATE = '/data/neruvalo-integration.json'
+GATE_CONFIG = '/data/config.toml'
+ACCOUNT_FAILURE_LIMIT = 3
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -139,6 +141,49 @@ def wait_ready(docker, name):
     raise SetupError(f'GateVeriq did not become ready. Inspect logs: docker logs {name}')
 
 
+def update_account_failure_limit(source):
+    original = tomllib.loads(source)
+    website = original.get('website', {})
+    if website.get('account_failure_limit') == ACCOUNT_FAILURE_LIMIT:
+        return source
+
+    setting = f'account_failure_limit = {ACCOUNT_FAILURE_LIMIT}'
+    headers = list(re.finditer(r'^[ \t]*\[[^\r\n]+\][ \t]*(?:#[^\r\n]*)?\r?$', source, re.MULTILINE))
+    for index, header in enumerate(headers):
+        if not re.fullmatch(r'\[website\][ \t]*(?:#.*)?', header.group().strip()):
+            continue
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(source)
+        section = source[header.end():end]
+        section, replaced = re.subn(
+            r'^[ \t]*account_failure_limit[ \t]*=[ \t]*[0-9_]+',
+            setting, section, count=1, flags=re.MULTILINE,
+        )
+        if not replaced:
+            section = '\n' + setting + '\n' + section
+        result = source[:header.end()] + section + source[end:]
+        break
+    else:
+        result = source.rstrip() + f'\n\n[website]\n{setting}\n'
+
+    expected = dict(original, website=dict(website, account_failure_limit=ACCOUNT_FAILURE_LIMIT))
+    if tomllib.loads(result) != expected:
+        raise SetupError('Cannot update [website].account_failure_limit safely.')
+    return result
+
+
+def ensure_account_failure_limit(docker, name):
+    source = docker.run('exec', name, 'cat', GATE_CONFIG).stdout
+    updated = update_account_failure_limit(source)
+    if updated == source:
+        return
+    docker.run('exec', '-i', name, 'sh', '-c',
+               'umask 077; tmp=$(mktemp /data/.config.XXXXXX) || exit 1; '
+               'trap \'rm -f "$tmp"\' EXIT; cat > "$tmp" && mv "$tmp" "$1"',
+               'sh', GATE_CONFIG, input=updated)
+    docker.run('restart', name)
+    wait_ready(docker, name)
+
+
 def ensure_integration(docker, name, origin):
     result = docker.run('exec', name, 'sh', '-c',
                         'if [ -f "$1" ]; then cat "$1"; else exit 42; fi', 'sh', STATE, check=False)
@@ -162,7 +207,7 @@ def ensure_integration(docker, name, origin):
         raise SetupError('Cannot read saved integration from the container.')
     validate_credentials(state)
     for action in ('register', 'login'):
-        docker.run('exec', name, 'gateveriq', '--config', '/data/config.toml',
+        docker.run('exec', name, 'gateveriq', '--config', GATE_CONFIG,
                    'integration-visual-policy', '--id', state['integration_id'], '--action', action, '--visual', 'adaptive')
     return state
 
@@ -209,6 +254,7 @@ def main():
     ensure_container(docker, args.name, args.public_port, args.internal_port)
     wait_ready(docker, args.name)
     state = ensure_integration(docker, args.name, origin)
+    ensure_account_failure_limit(docker, args.name)
     gate = dict(id=state['integration_id'], secret=state['integration_secret'],
                 internal=f'http://127.0.0.1:{args.internal_port}',
                 public=f'http://127.0.0.1:{args.public_port}', origin=origin)

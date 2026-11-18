@@ -206,6 +206,7 @@
   "ui.thisAccountOrRecoveryFileBelongsToAnotherServer": "このアカウントまたは復旧ファイルは別のサーバー用です。",
   "ui.anAccountWithThisUsernameOrEmailAlreadyExists": "このユーザー名またはメールは既に使われています。",
   "ui.invalidOrExpiredVerificationCode": "確認コードが無効か期限切れです。",
+  "ui.registrationRestartRequired": "登録の有効期限が切れたか、確認コードを3回間違えました。フォームに再入力してください。",
   "ui.tooManyRequestsTryAgainLater": "要求が多すぎます。後で再試行してください。",
   "ui.serverIdentityOrAccountKeysChangedSignInStopped": "サーバーの識別情報または鍵が変更されました。ログインを停止しました。",
   "ui.serverOrDataVersionIsNotSupported": "サーバーまたはデータのバージョンに対応していません。",

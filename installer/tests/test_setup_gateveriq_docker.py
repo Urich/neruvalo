@@ -22,6 +22,7 @@ class FakeDocker:
         self.state = None
         self.managed = True
         self.fail_policy = False
+        self.gate_config = 'difficulty_bits = 18\n[website]\naccount_failure_limit = 5\nfailure_limit = 6\n'
 
     def run(self, *args, check=True, input=None):
         self.calls.append(args)
@@ -40,13 +41,18 @@ class FakeDocker:
             result.returncode = 1
         elif args[0] == 'run':
             self.created = True
+        elif args[2:] == ('cat', setup.GATE_CONFIG):
+            result.stdout = self.gate_config
         elif args[:1] == ('exec',) and args[2:4] == ('sh', '-c'):
             result.returncode = 0 if self.state else 42
             result.stdout = json.dumps(self.state)
         elif 'integration-create' in args:
             result.stdout = json.dumps({'integration_id': 'mock-id', 'integration_secret': 'mock-secret'})
         elif args[:2] == ('exec', '-i'):
-            self.state = json.loads(input)
+            if args[-1] == setup.GATE_CONFIG:
+                self.gate_config = input
+            else:
+                self.state = json.loads(input)
         elif 'integration-visual-policy' in args and self.fail_policy:
             raise setup.SetupError('Mock policy failure')
         return result
@@ -78,6 +84,14 @@ class SetupTests(unittest.TestCase):
             self.invoke(config, docker)
             self.assertEqual(config.read_text(), first)
             self.assertEqual(sum('integration-create' in call for call in docker.calls), 1)
+            self.assertEqual(
+                [call[-4:] for call in docker.calls if 'integration-visual-policy' in call],
+                [('--action', 'register', '--visual', 'adaptive'),
+                 ('--action', 'login', '--visual', 'adaptive')] * 2,
+            )
+            self.assertEqual(tomllib.loads(docker.gate_config),
+                             {'difficulty_bits': 18, 'website': {'account_failure_limit': 3, 'failure_limit': 6}})
+            self.assertEqual(docker.calls.count(('restart', 'neruvalo-gateveriq')), 1)
             run = next(call for call in docker.calls if call[0] == 'run')
             self.assertIn('127.0.0.1:9081:9081', run)
             self.assertIn('GATEVERIQ_INTERNAL_LISTEN=0.0.0.0:9081', run)
@@ -89,6 +103,12 @@ class SetupTests(unittest.TestCase):
             config = Path(directory) / 'server.toml'
             self.invoke(config, FakeDocker())
             self.assertTrue(tomllib.loads(config.read_text())['dev_mode'])
+
+    def test_adds_threshold_when_website_settings_are_absent(self):
+        for source in ('difficulty_bits = 18\n', 'difficulty_bits = 18\n[website]\n'):
+            updated = setup.update_account_failure_limit(source)
+            self.assertEqual(tomllib.loads(updated),
+                             {'difficulty_bits': 18, 'website': {'account_failure_limit': 3}})
 
     def test_policy_failure_keeps_original_config_and_retry_reuses_credentials(self):
         with tempfile.TemporaryDirectory() as directory:

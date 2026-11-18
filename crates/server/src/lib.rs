@@ -34,12 +34,15 @@ pub fn now() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
+const REGISTRATION_CODE_ATTEMPT_LIMIT: u8 = 3;
+
 struct PendingRegistration {
     account: String,
     login: String,
     email: String,
     code_hash: String,
     expires: i64,
+    failed_codes: u8,
 }
 struct PendingLogin {
     account: String,
@@ -366,6 +369,7 @@ async fn register_begin(
             email: r.email,
             code_hash: crypto::digest(&code),
             expires: now() + 600,
+            failed_codes: 0,
         },
     );
     Ok(Json(RegisterChallenge {
@@ -381,8 +385,24 @@ async fn register_finish(
 ) -> Api<Value> {
     rate(&s, "registration-finish").await?;
     let mut pending = s.registrations.lock().await;
-    let p = pending.get(&r.ticket).ok_or_else(invalid)?;
-    if p.expires < now() || p.code_hash != crypto::digest(&r.email_code) {
+    let p = pending
+        .get_mut(&r.ticket)
+        .ok_or(ApiError(StatusCode::GONE, REGISTRATION_EXPIRED))?;
+    if p.expires <= now() {
+        pending.remove(&r.ticket);
+        remove_registration_email(&s.outbox, &r.ticket);
+        return Err(ApiError(StatusCode::GONE, REGISTRATION_EXPIRED));
+    }
+    if p.code_hash != crypto::digest(&r.email_code) {
+        p.failed_codes += 1;
+        if p.failed_codes >= REGISTRATION_CODE_ATTEMPT_LIMIT {
+            pending.remove(&r.ticket);
+            remove_registration_email(&s.outbox, &r.ticket);
+            return Err(ApiError(
+                StatusCode::GONE,
+                REGISTRATION_CODE_ATTEMPTS_EXHAUSTED,
+            ));
+        }
         return Err(ApiError(StatusCode::BAD_REQUEST, "INVALID_EMAIL_CODE"));
     }
     validate_bundle(&r.bundle)?;
@@ -418,8 +438,15 @@ async fn register_finish(
     integrity::store(&mut tx, &p.account, &r.manifest).await?;
     tx.commit().await?;
     pending.remove(&r.ticket);
-    let _ = std::fs::remove_file(s.outbox.join(format!("{}.txt", r.ticket)));
+    remove_registration_email(&s.outbox, &r.ticket);
     Ok(Json(json!({"registered":true})))
+}
+fn remove_registration_email(outbox: &std::path::Path, ticket: &str) {
+    if let Err(error) = std::fs::remove_file(outbox.join(format!("{ticket}.txt"))) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(kind = ?error.kind(), "Could not remove registration email from the development outbox");
+        }
+    }
 }
 fn ensure_api_empty_manifest(manifest: &VaultManifest) -> Result<(), ApiError> {
     if manifest.generation != 1

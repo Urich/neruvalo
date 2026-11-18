@@ -206,6 +206,7 @@
   "ui.thisAccountOrRecoveryFileBelongsToAnotherServer": "هذا الحساب أو ملف الاسترداد يخص خادمًا آخر.",
   "ui.anAccountWithThisUsernameOrEmailAlreadyExists": "يوجد حساب بهذا الاسم أو البريد الإلكتروني.",
   "ui.invalidOrExpiredVerificationCode": "رمز التحقق غير صالح أو منتهي الصلاحية.",
+  "ui.registrationRestartRequired": "انتهت صلاحية التسجيل أو تم إدخال الرمز بشكل خاطئ ثلاث مرات. املأ النموذج مرة أخرى.",
   "ui.tooManyRequestsTryAgainLater": "طلبات كثيرة جدًا. حاول لاحقًا.",
   "ui.serverIdentityOrAccountKeysChangedSignInStopped": "تغيرت هوية الخادم أو مفاتيح الحساب. تم إيقاف الدخول.",
   "ui.serverOrDataVersionIsNotSupported": "إصدار الخادم أو البيانات غير مدعوم.",

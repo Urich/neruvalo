@@ -106,15 +106,12 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [server, setServer] = useState("");
   const [login, setLogin] = useState("");
-  const [verificationResult, setVerificationResult] = useState<{email: string; secret: string | null} | null>(null);
-  const [verificationEmail, setVerificationEmail] = useState("");
+  const [verificationSecret, setVerificationSecret] = useState<string | null>(null);
   const [verificationRevision, setVerificationRevision] = useState(0);
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [mode, setMode] = useState<"login" | "register" | "verify">("login");
-  const verificationSecret = verificationResult &&
-    (mode !== "register" || verificationResult.email === email)
-    ? verificationResult.secret : null;
+  const [registrationVerificationSlot, setRegistrationVerificationSlot] = useState<HTMLDivElement | null>(null);
   const [offline, setOffline] = useState("");
   const offlineProfile = transferSource ? "" : offline;
   const [code, setCode] = useState("");
@@ -740,7 +737,7 @@ export default function App() {
         try {
           await call("login", { server, login, password, verification_secret: verificationSecret });
         } finally {
-          setVerificationResult(null);
+          setVerificationSecret(null);
           setVerificationRevision((value) => value + 1);
         }
       }
@@ -754,25 +751,34 @@ export default function App() {
   }
   async function register() {
     await run(async () => {
-      let r;
-      try {
-        r = await call("register_begin", {
-          server, login, email, password,
-          with_recovery: recovery,
-          verification_secret: verificationSecret,
-        });
-      } finally {
-        setVerificationResult(null);
-        setVerificationRevision((value) => value + 1);
-      }
+      const r = await call("register_begin", {
+        server, login, email, password,
+        with_recovery: recovery,
+      });
       setTicket(r.ticket);
       setPassword("");
       setMode("verify");
     });
   }
   async function finishRegistration() {
+    if (busy || !code.trim()) return;
     await run(async () => {
-      await call("register_finish", { server, code });
+      try {
+        await call("register_finish", { server, code });
+      } catch (error) {
+        if (errorText(error) === "ui.registrationRestartRequired") {
+          setMode("register");
+          setLogin("");
+          setEmail("");
+          setPassword("");
+          setCode("");
+          setTicket("");
+          setRecovery(true);
+          setCertReady(false);
+          setVerificationSecret(null);
+        }
+        throw error;
+      }
       setCertReady(recovery);
       setMode("login");
       setCode("");
@@ -917,7 +923,7 @@ export default function App() {
           setServer(destination);
           setOtherServer(!destination);
           setLogin("");
-          setVerificationResult(null);
+          setVerificationSecret(null);
           setTransferSource(source);
           setMode("login");
         }}
@@ -933,7 +939,7 @@ export default function App() {
           context(e);
       }}
     >
-      <VerificationDialog />
+      <VerificationDialog inlineTarget={mode === "login" ? undefined : registrationVerificationSlot} />
       {archiveRequest && status.unlocked && (
         <ArchiveDialog
           request={archiveRequest}
@@ -1305,7 +1311,7 @@ export default function App() {
                     </p>
                     <button
                       className="primary full"
-                      disabled={busy || !code}
+                      disabled={busy || !code.trim()}
                       onClick={finishRegistration}
                     >
                       {t("ui.confirm")}
@@ -1411,7 +1417,6 @@ export default function App() {
                           type="email"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
-                          onBlur={(e) => setVerificationEmail(e.target.value)}
                           required
                         />
                       </label>
@@ -1429,11 +1434,10 @@ export default function App() {
                         required
                       />
                     </label>
-                    {!offlineProfile && <VerificationInline
+                    {mode === "login" && !offlineProfile && <VerificationInline
                       key={`${mode}:${verificationRevision}`}
-                      server={server} login={login} email={mode === "register" ? verificationEmail : ""}
-                      kind={mode === "register" ? "register" : "login"}
-                      onReady={(secret) => setVerificationResult({email: verificationEmail, secret})}
+                      server={server} login={login} email="" kind="login"
+                      onReady={setVerificationSecret}
                     />}
                     {mode === "register" && (
                       <label className="check">
@@ -1449,7 +1453,7 @@ export default function App() {
                       className="primary full"
                       disabled={
                         busy ||
-                        (!offlineProfile && verificationSecret === null) ||
+                        (mode === "login" && !offlineProfile && verificationSecret === null) ||
                         certReady ||
                         !configured ||
                         !!launch.startup_error
@@ -1461,6 +1465,7 @@ export default function App() {
                           ? t("ui.createAccount")
                           : t("ui.unlockVaultLabel")}
                     </button>
+                    {mode === "register" && <div ref={setRegistrationVerificationSlot} />}
                   </form>
                 )}
                 {certReady && (
@@ -1489,6 +1494,7 @@ export default function App() {
                     }
                     onClick={() => {
                       setMode(mode === "register" ? "login" : "register");
+                      setVerificationSecret(null);
                       setOffline("");
                       setError("");
                     }}

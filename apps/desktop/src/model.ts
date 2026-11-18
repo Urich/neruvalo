@@ -185,6 +185,7 @@ export function errorText(error: unknown): string {
     [/CONTACT_CAMERA_ERROR/, "contactCameraError"],
     [/KEEPASS_REPORT_UNAVAILABLE/, "importReportNotAvailable"],
     [/VERIFICATION_EXPIRED/, "verificationExpired"],
+    [/REGISTRATION_CODE_ATTEMPTS_EXHAUSTED|REGISTRATION_EXPIRED/, "registrationRestartRequired"],
     [/INVALID_LOGIN/, "loginRequirements"],
     [/INVALID_EMAIL\b/, "invalidEmail"],
     [/VERIFICATION_CANCELLED/, "verificationCancelled"],

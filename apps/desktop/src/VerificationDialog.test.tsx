@@ -34,6 +34,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
+  delete document.documentElement.dataset.theme;
 });
 async function emit(name: string, payload: unknown) {
   await act(async () => native.handlers.get(name)!({ payload }));
@@ -89,4 +90,13 @@ it("uses the resolved system language in automatic mode", async () => {
   });
   await emit("verification-open", attempt);
   expect(new URL(host.querySelector("iframe")!.src).searchParams.get("lang")).toBe("ru");
+});
+
+it("passes the active theme to the registration frame", async () => {
+  document.documentElement.dataset.theme = "dark-green";
+  await act(async () => root.render(<VerificationDialog inlineTarget={host} />));
+  await emit("verification-open", attempt);
+  const frame = host.querySelector("iframe")!;
+  expect(new URL(frame.src).searchParams.get("theme")).toBe("dark-green");
+  expect(host.querySelector("dialog")).toBeNull();
 });

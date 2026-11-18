@@ -206,6 +206,7 @@
   "ui.thisAccountOrRecoveryFileBelongsToAnotherServer": "此帳戶或復原檔案屬於其他伺服器。",
   "ui.anAccountWithThisUsernameOrEmailAlreadyExists": "此使用者名稱或電子郵件已被使用。",
   "ui.invalidOrExpiredVerificationCode": "驗證碼無效或已過期。",
+  "ui.registrationRestartRequired": "註冊已過期，或驗證碼已連續輸錯三次。請重新填寫表單。",
   "ui.tooManyRequestsTryAgainLater": "請求過多。請稍後再試。",
   "ui.serverIdentityOrAccountKeysChangedSignInStopped": "伺服器身分或帳戶金鑰已變更。已停止登入。",
   "ui.serverOrDataVersionIsNotSupported": "不支援此伺服器或資料版本。",

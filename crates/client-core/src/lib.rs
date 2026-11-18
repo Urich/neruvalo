@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use uuid::Uuid;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 mod attachments;
 mod groups;
 pub mod totp;
@@ -288,6 +288,8 @@ async fn response<T: serde::de::DeserializeOwned>(mut r: reqwest::Response) -> R
     }
     Ok(serde_json::from_slice(&bytes)?)
 }
+const VERIFICATION_HEADER: &str = "x-neruvalo-verification";
+
 async fn verified_send(
     request: reqwest::RequestBuilder,
     http: &reqwest::Client,
@@ -342,10 +344,11 @@ async fn verified_send(
         );
         if status["verified"] == true {
             drop(view);
-            return Ok(retry
-                .header("x-neruvalo-verification", secret)
-                .send()
-                .await?);
+            let mut retry = retry.build()?;
+            let mut proof = reqwest::header::HeaderValue::from_str(secret)?;
+            proof.set_sensitive(true);
+            retry.headers_mut().insert(VERIFICATION_HEADER, proof);
+            return Ok(http.execute(retry).await?);
         }
         tokio::time::sleep(Duration::from_millis(1000)).await;
     }
@@ -673,7 +676,7 @@ impl Client {
                 self.http
                     .post(format!("{server}/api/v1/register/begin"))
                     .header(
-                        "x-neruvalo-verification",
+                        VERIFICATION_HEADER,
                         self.verification_secret.take().unwrap_or_default(),
                     )
                     .json(&RegisterBegin {
@@ -779,14 +782,23 @@ impl Client {
             .as_mut()
             .ok_or_else(|| anyhow!("NO_PENDING_REGISTRATION"))?;
         p.finish.email_code = code.trim().into();
-        let result: Value = response(
-            self.http
-                .post(format!("{server}/api/v1/register/finish"))
-                .json(&p.finish)
-                .send()
-                .await?,
-        )
-        .await?;
+        let request = self
+            .http
+            .post(format!("{server}/api/v1/register/finish"))
+            .json(&p.finish);
+        p.finish.email_code.zeroize();
+        let result: Value = match response(request.send().await?).await {
+            Ok(result) => result,
+            Err(error) => {
+                if matches!(
+                    error.to_string().as_str(),
+                    REGISTRATION_CODE_ATTEMPTS_EXHAUSTED | REGISTRATION_EXPIRED
+                ) {
+                    self.pending = None;
+                }
+                return Err(error);
+            }
+        };
         self.certificate = self.pending.take().and_then(|p| p.certificate);
         Ok(result)
     }
@@ -830,7 +842,7 @@ impl Client {
                 self.http
                     .post(format!("{server}/api/v1/auth/begin"))
                     .header(
-                        "x-neruvalo-verification",
+                        VERIFICATION_HEADER,
                         self.verification_secret.take().unwrap_or_default(),
                     )
                     .json(&LoginBegin {

@@ -1026,43 +1026,94 @@ describe("local proxy settings", () => {
   });
 });
 
-it("keeps the verification frame while typing email and refreshes only on blur", async () => {
+it("opens the registration verification only after submitting the completed form", async () => {
   const original = native.invoke.getMockImplementation()!;
-  let attempt = 0;
-  native.invoke.mockImplementation((...args) => {
-    if (args[1].request.action === "prepare_verification") {
-      attempt++;
-      return Promise.resolve({enabled:true, secret:"a".repeat(43), url:`https://a.example/verification#${attempt}`});
-    }
-    return original(...args);
+  const listeners = new Map<string, (event: { payload: unknown }) => void>();
+  native.listen.mockImplementation(async (name, listener) => {
+    listeners.set(name, listener);
+    return () => listeners.delete(name);
   });
-  setPreference("en");
+  let finishRegistration!: (response: { ticket: string }) => void;
+  native.invoke.mockImplementation((command, args) => {
+    if (args.request.action === "register_begin") {
+      listeners.get("verification-open")!({ payload: {
+        id: "register-check", url: "https://a.example/verification#attempt",
+      }});
+      return new Promise((resolve) => { finishRegistration = resolve; });
+    }
+    return original(command, args);
+  });
+  setPreference("ru");
   await mount();
-  await click(button("Create account"));
+  await click(button(translate("ui.createAccount")));
   await change(document.querySelector<HTMLInputElement>('input[autocomplete="username"]')!, "alice");
-  const email = document.querySelector<HTMLInputElement>('input[type="email"]')!;
-  await change(email, "a@example.test");
-  await act(async () => { email.dispatchEvent(new FocusEvent("focusout", {bubbles:true})); });
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
-  const frame = document.querySelector<HTMLIFrameElement>(".verification-inline iframe")!;
-  expect(frame).not.toBeNull();
+  await change(document.querySelector<HTMLInputElement>('input[type="email"]')!, "a@example.test");
+  await change(document.querySelector<HTMLInputElement>('input[autocomplete="new-password"]')!, "server-password-123");
+  expect(document.querySelector(".verification-inline, .verification-dialog, .registration-verification")).toBeNull();
+  expect(native.invoke.mock.calls.some(([, args]) =>
+    ["prepare_verification", "register_begin"].includes(args.request.action))).toBe(false);
+
+  const submit = document.querySelector<HTMLButtonElement>("form > button.primary")!;
+  await click(submit);
+  const section = submit.nextElementSibling?.querySelector(".registration-verification")!;
+  expect(document.querySelector(".verification-dialog")).toBeNull();
+  expect(section.querySelector("h3")?.textContent).toBe("Пройдите проверку.");
+  const frame = section.querySelector("iframe")!;
   await act(async () => window.dispatchEvent(new MessageEvent("message", {
-    origin:"https://a.example", source:frame.contentWindow,
-    data:{type:"neruvalo-verification",state:"verified"},
+    origin: "https://a.example",
+    source: frame.contentWindow,
+    data: { type: "neruvalo-verification", state: "visual" },
   })));
-  const submit = document.querySelector<HTMLButtonElement>('form button.primary')!;
-  expect(submit.disabled).toBe(false);
-  await change(email, "ab@example.test");
+  expect(section.classList.contains("registration-verification-visual")).toBe(true);
+  expect(section.querySelector("iframe")).toBe(frame);
   expect(submit.disabled).toBe(true);
-  await change(email, "abc@example.test");
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
-  expect(document.querySelector(".verification-inline iframe")).toBe(frame);
-  expect(attempt).toBe(1);
-  await act(async () => { email.dispatchEvent(new FocusEvent("focusout", {bubbles:true})); });
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
-  expect(attempt).toBe(2);
-  expect(document.querySelector(".verification-inline iframe")?.getAttribute("src")).toContain("#2");
-  expect(submit.disabled).toBe(true);
+  const registration = native.invoke.mock.calls.find(([, args]) => args.request.action === "register_begin")?.[1].request;
+  expect(registration).toMatchObject({ login: "alice", email: "a@example.test" });
+  expect(registration).not.toHaveProperty("verification_secret");
+
+  await act(async () => {
+    listeners.get("verification-close")!({ payload: "register-check" });
+    finishRegistration({ ticket: "registration" });
+  });
+  expect(document.querySelector(".registration-verification")).toBeNull();
+  expect(document.querySelector(".ticket")?.textContent).toContain("registration");
+});
+
+it("clears the registration form after the server rejects the third email code", async () => {
+  const original = native.invoke.getMockImplementation()!;
+  let attempts = 0;
+  native.invoke.mockImplementation(async (command, args) => {
+    switch (args.request.action) {
+      case "register_begin":
+        return { ticket: "test-registration" };
+      case "register_finish":
+        attempts++;
+        throw new Error(attempts < 3 ? "INVALID_EMAIL_CODE" : "REGISTRATION_CODE_ATTEMPTS_EXHAUSTED");
+      default:
+        return original(command, args);
+    }
+  });
+
+  await mount();
+  await click(button(translate("ui.createAccount")));
+  const field = (selector: string) => document.querySelector<HTMLInputElement>(selector)!;
+  await change(field('[autocomplete="username"]'), "alice");
+  await change(field('[type="email"]'), "alice@example.test");
+  await change(field('[autocomplete="new-password"]'), "server-password-123");
+  await click(document.querySelector<HTMLButtonElement>("form > button.primary")!);
+
+  const code = field('.auth-card input[autocomplete="off"]');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await change(code, "wrong");
+    await click(button(translate("ui.confirm"), document.querySelector(".auth-card")!));
+  }
+  expect(attempts).toBe(3);
+  expect(document.querySelector(".auth-card .ticket")).toBeNull();
+  expect(field('[autocomplete="username"]').value).toBe("");
+  expect(field('[type="email"]').value).toBe("");
+  expect(field('[autocomplete="new-password"]').value).toBe("");
+  expect(document.querySelector('[role="alert"]')?.textContent)
+    .toContain(translate("ui.registrationRestartRequired"));
 });
 
 it("creates and edits a local vault without requesting a server or bot check", async () => {

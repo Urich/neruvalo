@@ -206,6 +206,7 @@
   "ui.thisAccountOrRecoveryFileBelongsToAnotherServer": "This account or recovery file belongs to another server.",
   "ui.anAccountWithThisUsernameOrEmailAlreadyExists": "An account with this username or email already exists.",
   "ui.invalidOrExpiredVerificationCode": "Invalid or expired verification code.",
+  "ui.registrationRestartRequired": "Registration has expired or the code was entered incorrectly three times. Fill in the form again.",
   "ui.tooManyRequestsTryAgainLater": "Too many requests. Try again later.",
   "ui.serverIdentityOrAccountKeysChangedSignInStopped": "Server identity or account keys changed. Sign-in stopped.",
   "ui.serverOrDataVersionIsNotSupported": "Server or data version is not supported.",

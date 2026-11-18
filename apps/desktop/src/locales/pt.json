@@ -206,6 +206,7 @@
   "ui.thisAccountOrRecoveryFileBelongsToAnotherServer": "Esta conta ou ficheiro de recuperação pertence a outro servidor.",
   "ui.anAccountWithThisUsernameOrEmailAlreadyExists": "Já existe uma conta com este utilizador ou e-mail.",
   "ui.invalidOrExpiredVerificationCode": "Código de confirmação inválido ou expirado.",
+  "ui.registrationRestartRequired": "O cadastro expirou ou o código foi digitado incorretamente três vezes. Preencha o formulário novamente.",
   "ui.tooManyRequestsTryAgainLater": "Demasiados pedidos. Tente mais tarde.",
   "ui.serverIdentityOrAccountKeysChangedSignInStopped": "A identidade do servidor ou as chaves mudaram. Entrada interrompida.",
   "ui.serverOrDataVersionIsNotSupported": "Versão do servidor ou dos dados não suportada.",

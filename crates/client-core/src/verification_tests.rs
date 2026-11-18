@@ -1,5 +1,9 @@
 use super::*;
-use axum::{http::StatusCode, routing::get, Json, Router};
+use axum::{
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
@@ -29,18 +33,23 @@ async fn embedded_view_success_cancellation_and_failure() {
         let app = Router::new()
             .route(
                 "/operation",
-                get({
+                post({
                     let dropped = dropped.clone();
                     let calls = calls.clone();
                     let secret = secret.clone();
-                    move |headers: axum::http::HeaderMap| {
+                    move |headers: axum::http::HeaderMap, Json(body): Json<Value>| {
                         let dropped = dropped.clone();
                         let calls = calls.clone();
                         let secret = secret.clone();
                         async move {
+                            assert_eq!(body, json!({"login":"alice"}));
                             calls.fetch_add(1, Ordering::SeqCst);
-                            if let Some(proof) = headers.get("x-neruvalo-verification") {
+                            if let Some(proof) = headers
+                                .get(VERIFICATION_HEADER)
+                                .filter(|proof| !proof.is_empty())
+                            {
                                 assert_eq!(proof, secret.as_str());
+                                assert_eq!(headers.get_all(VERIFICATION_HEADER).iter().count(), 1);
                                 assert!(dropped.load(Ordering::SeqCst));
                                 (StatusCode::OK, Json(json!({"ok":true})))
                             } else {
@@ -80,7 +89,9 @@ async fn embedded_view_success_cancellation_and_failure() {
         });
         let http = reqwest::Client::new();
         let result = verified_send(
-            http.get(format!("{origin}/operation")),
+            http.post(format!("{origin}/operation"))
+                .header(VERIFICATION_HEADER, "")
+                .json(&json!({"login":"alice"})),
             &http,
             Some(&opener),
         )

@@ -206,6 +206,7 @@
   "ui.thisAccountOrRecoveryFileBelongsToAnotherServer": "Этот аккаунт или сертификат относится к другому серверу.",
   "ui.anAccountWithThisUsernameOrEmailAlreadyExists": "Аккаунт с таким логином или email уже существует.",
   "ui.invalidOrExpiredVerificationCode": "Неверный или просроченный код подтверждения.",
+  "ui.registrationRestartRequired": "Регистрация сброшена: срок подтверждения истёк или код трижды введён неверно. Заполните форму заново.",
   "ui.tooManyRequestsTryAgainLater": "Слишком много запросов. Повторите позже.",
   "ui.serverIdentityOrAccountKeysChangedSignInStopped": "Сервер или ключи аккаунта изменились. Вход остановлен.",
   "ui.serverOrDataVersionIsNotSupported": "Версия сервера или данных не поддерживается.",

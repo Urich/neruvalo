@@ -75,6 +75,45 @@ async fn register(
 }
 
 #[tokio::test]
+async fn three_wrong_email_codes_cancel_registration_and_remove_the_outbox_file() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (server, handle) = start(root).await;
+    let mut client = Client::new(root.join("client")).unwrap();
+    let registration = client
+        .register_begin(&server, "alice", "alice@example.test", password(), true)
+        .await
+        .unwrap();
+    let ticket = registration["ticket"].as_str().unwrap();
+    let file = root.join("outbox").join(format!("{ticket}.txt"));
+    let email = std::fs::read_to_string(&file).unwrap();
+    let code = email
+        .lines()
+        .find_map(|line| line.strip_prefix("Confirmation code: "))
+        .unwrap();
+
+    for _ in 0..2 {
+        let error = client.register_finish(&server, "wrong").await.unwrap_err();
+        assert_eq!(error.to_string(), "INVALID_EMAIL_CODE");
+        assert!(file.is_file());
+    }
+    let error = client.register_finish(&server, "wrong").await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        neruvalo_protocol::REGISTRATION_CODE_ATTEMPTS_EXHAUSTED
+    );
+    assert!(!file.exists());
+    assert!(client.take_certificate().is_none());
+    let error = client.register_finish(&server, code).await.unwrap_err();
+    assert_eq!(error.to_string(), "NO_PENDING_REGISTRATION");
+
+    assert!(register(&mut client, &server, "alice", root)
+        .await
+        .is_some());
+    handle.abort();
+}
+
+#[tokio::test]
 async fn encrypted_lifecycle_conflict_offline_recovery_and_server_restart() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
