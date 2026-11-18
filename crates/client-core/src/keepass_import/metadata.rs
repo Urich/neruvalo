@@ -106,7 +106,10 @@ fn native_secret(key: &str, value: &str) -> Result<Vec<u8>> {
         )?)
     } else if key.ends_with("Hex") {
         let value: String = value.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-        ensure!(value.len() % 2 == 0 && value.is_ascii(), "INVALID_TOTP");
+        ensure!(
+            value.len().is_multiple_of(2) && value.is_ascii(),
+            "INVALID_TOTP"
+        );
         (0..value.len())
             .step_by(2)
             .map(|i| Ok(u8::from_str_radix(&value[i..i + 2], 16)?))

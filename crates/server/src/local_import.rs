@@ -24,6 +24,9 @@ pub(super) async fn import(
         }
         chains.insert(v.record_id.clone(), (v.revision, v.version_id.clone()));
         let save = SaveRecord {
+            signature_version: v.signature_version,
+            created_at: v.created_at,
+            manifest: None,
             operation_id: v.operation_id.clone(),
             record_id: v.record_id.clone(),
             version_id: v.version_id.clone(),
@@ -50,6 +53,7 @@ pub(super) async fn import(
         }
         return Ok(Json(decode(&row.get::<String, _>("result"))?));
     }
+    integrity::verify(&mut tx, &s, &actor).await?;
     for (save, version) in requests.iter().zip(&r.versions) {
         if let Some(row) = sqlx::query("SELECT v.body,r.account FROM versions v JOIN records r ON r.id=v.record_id WHERE v.id=$1")
             .bind(&version.version_id).fetch_optional(&mut *tx).await? {
@@ -67,6 +71,7 @@ pub(super) async fn import(
             .execute(&mut *tx)
             .await?;
     }
+    integrity::advance(&mut tx, &s, &actor, r.manifest.as_ref()).await?;
     let result = json!({"operation_id":r.operation_id,"imported":r.versions.len()});
     sqlx::query("INSERT INTO operations(account,id,request_hash,result) VALUES($1,$2,$3,$4)")
         .bind(&actor)

@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { KeepassImport, KeepassReport } from "./KeepassImport";
-import { setPreference } from "./i18n";
+import { setPreference, translate } from "./i18n";
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -21,6 +21,7 @@ beforeEach(() => {
   setPreference("en"); changed.mockReset().mockResolvedValue(null);
   native.invoke.mockReset().mockImplementation(async (_command, {request}) => {
     if (request.action === "keepass_status" || request.action === "keepass_last_report") return null;
+    if (request.action === "keepass_open_report") return "<html><body>Memory-only report</body></html>";
     if (request.action === "keepass_pick_file") return { id: request.kind, name: request.kind === "database" ? "vault.kdbx" : "vault.key" };
     if (request.action === "keepass_prepare") return preview;
     return true;
@@ -70,15 +71,17 @@ it("blocks confirmation for rejected attachments and cancels the prepared operat
   expect(native.invoke).toHaveBeenCalledWith("command", {request:{action:"keepass_cancel",expected_profile:"alice",ticket:"ticket"}});
 });
 
-it("opens the detailed HTML report through the native browser command while showing only a summary on the page", async () => {
+it("shows the detailed report in a sandboxed memory-only iframe", async () => {
   const details = {code:"entry_metadata",item:"Private entry name",field:"AutoType",source_id:"source-id",group_path:["Private group"],blocking:false};
-  native.invoke.mockImplementation(async (_command, {request}) => request.action === "keepass_status" ? {...preview,issues:[details]} : true);
+  native.invoke.mockImplementation(async (_command, {request}) => request.action === "keepass_status" ? {...preview,issues:[details]} : request.action === "keepass_open_report" ? "<html><body>Detailed report</body></html>" : true);
   await mount();
   expect(host.querySelector("dialog")).toBeNull();
   expect(host.textContent).not.toContain(details.item);
   expect(host.textContent).not.toContain(details.field);
   await click("Open HTML report");
   expect(native.invoke).toHaveBeenCalledWith("command", {request:{action:"keepass_open_report",expected_profile:"alice",ticket:"ticket",labels:expect.objectContaining({language:"en",reportField:"Field / attachment",reportSourceId:"Source ID"})}});
+  expect(host.querySelector("iframe")?.getAttribute("srcdoc")).toContain("Detailed report");
+  expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
   expect(changed).not.toHaveBeenCalled();
 });
 
@@ -164,4 +167,13 @@ it("allows choosing a key file first and requires a database before starting", a
   expect(host.querySelector<HTMLInputElement>('[aria-label="Optional key file"]')!.value).toBe("");
   expect(host.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(true);
   expect(native.invoke.mock.calls.some(([, args]) => args.request.action === "keepass_prepare")).toBe(false);
+});
+
+it("shows only operation status when detailed report was discarded on restart", async () => {
+  native.invoke.mockImplementation(async (_command, {request}) => request.action === "keepass_status" ? {...preview,report_available:false,entries:0,groups:0,issues:[]} : null);
+  await mount();
+  expect(host.textContent).toContain(translate("ui.importReportNotAvailable"));
+  expect(host.querySelector("dl")).toBeNull();
+  const reportButton = Array.from(host.querySelectorAll("button")).find(button => button.textContent === translate("ui.openImportReport"));
+  expect(reportButton?.disabled).toBe(true);
 });

@@ -14,7 +14,7 @@ fn read_profile(path: &Path) -> Result<Profile> {
         std::fs::metadata(path)?.len() <= 64 * 1024,
         "INVALID_LOCAL_VAULT_FILE"
     );
-    let p: Profile = serde_json::from_slice(&std::fs::read(path)?)
+    let p: Profile = decode_profile(&read_limited(path, 64 * 1024)?)
         .map_err(|_| anyhow!("INVALID_LOCAL_VAULT_FILE"))?;
     validate_profile(p)
 }
@@ -53,7 +53,16 @@ pub(super) async fn profile_for_unlock(
 ) -> Result<(Profile, PathBuf)> {
     let folder = dir.join(id);
     let Some(link) = location(&folder.join("local-location.json"))? else {
-        return Ok((p, folder.join("cache.sqlite3")));
+        let mut original = persisted_profile(&folder.join("cache.sqlite3")).await?;
+        ensure!(
+            original.kind == p.kind
+                && original.account_id == p.account_id
+                && original.bundle.public_sign == p.bundle.public_sign,
+            "VAULT_INTEGRITY: profile identity"
+        );
+        original.id = id.into();
+        original.timeout_seconds = p.timeout_seconds;
+        return Ok((original, folder.join("cache.sqlite3")));
     };
     ensure!(
         p.kind == ProfileKind::Local && matches(&link, &p),
@@ -88,44 +97,41 @@ pub(super) async fn existing_cache(path: &Path) -> Result<AnyPool> {
         .await
         .map_err(|_| anyhow!("INVALID_LOCAL_VAULT_FILE"))?;
     ensure!(
-        row.is_some_and(|r| r.get::<String, _>("value") == "2"),
+        row.is_some_and(|r| r.get::<String, _>("value") == DATABASE_SCHEMA),
         "UNSUPPORTED_LOCAL_SCHEMA"
     );
     Ok(pool)
 }
 
 async fn source_profile(database: &Path) -> Result<Profile> {
+    validate_profile(persisted_profile(database).await?)
+}
+async fn persisted_profile(database: &Path) -> Result<Profile> {
     let pool = existing_cache(database).await?;
-    let row = sqlx::query("SELECT value FROM meta WHERE name='local_profile'")
+    let row = sqlx::query("SELECT CASE WHEN length(CAST(value AS BLOB))<=65536 THEN value ELSE '' END AS value FROM meta WHERE name='local_profile'")
         .fetch_optional(&pool)
         .await?;
     pool.close().await;
     if let Some(row) = row {
         let raw = row.get::<String, _>("value");
         ensure!(raw.len() <= 64 * 1024, "INVALID_LOCAL_VAULT_FILE");
-        return validate_profile(
-            serde_json::from_str(&raw).map_err(|_| anyhow!("INVALID_LOCAL_VAULT_FILE"))?,
-        );
+        return decode_profile(raw.as_bytes());
     }
-    // Older vaults keep the wrapped keys beside the database.
-    read_profile(
-        &database
-            .parent()
-            .ok_or_else(|| anyhow!("INVALID_LOCAL_VAULT_FILE"))?
-            .join("profile.json"),
-    )
+    anyhow::bail!("VAULT_INTEGRITY: missing embedded profile")
 }
 
 pub(super) async fn unlock_candidate(
     profile: Profile,
     path: &Path,
     password: Zeroizing<String>,
+    checkpoint_dir: PathBuf,
 ) -> Result<Unlocked> {
-    let local = crypto::password_key(&password, &unb64(&profile.local_salt)?)?;
+    ensure!(profile.format_version == 3, "UNSUPPORTED_LOCAL_SCHEMA");
+    let local = profile.local_kdf.derive(&password)?;
     let root = crypto::parse_key(&crypto::open(
         local.as_ref(),
         &profile.local_root,
-        &local_context(&profile.server_id, &profile.account_id),
+        &local_context(&profile.server_id, &profile.account_id, &profile.local_kdf),
     )?)?;
     let raw = crypto::open(
         root.as_ref(),
@@ -149,6 +155,11 @@ pub(super) async fn unlock_candidate(
         needs_sync: false,
         index_cache: BTreeMap::new(),
         attachment_handles: attachments::Handles::default(),
+        reports: Default::default(),
+        last_report: Default::default(),
+        checkpoint_dir,
+        freshness: "unconfirmed".into(),
+        verified_versions: Default::default(),
     };
     validate_cached_vault(&mut unlocked).await?;
     Ok(unlocked)
@@ -211,7 +222,7 @@ impl Client {
             .file_stem()
             .and_then(|v| v.to_str())
             .ok_or_else(|| anyhow!("INVALID_LOCAL_VAULT_PATH"))?;
-        let (profile, _, _) = local::new_profile(name, &password)?;
+        let (profile, keys, _) = local::new_profile(name, &password)?;
         let parent = path
             .parent()
             .ok_or_else(|| anyhow!("INVALID_LOCAL_VAULT_PATH"))?;
@@ -243,16 +254,18 @@ impl Client {
             .await?;
         let setup: Result<()> = async {
             let mut tx = pool.begin().await?;
-            for statement in [
-                "CREATE TABLE meta(name TEXT PRIMARY KEY,value TEXT NOT NULL)",
-                "CREATE TABLE versions(id TEXT PRIMARY KEY,record_id TEXT NOT NULL,revision BIGINT NOT NULL,body TEXT NOT NULL)",
-                "CREATE INDEX versions_latest ON versions(record_id,revision DESC)",
-                "INSERT INTO meta(name,value) VALUES('schema_version','2')",
-            ] {sqlx::query(statement).execute(&mut *tx).await?;}
-            sqlx::query("INSERT INTO meta(name,value) VALUES('local_profile',$1)").bind(serde_json::to_string(&profile)?).execute(&mut *tx).await?;
+            for statement in CACHE_SCHEMA.split(';').filter(|s| !s.trim().is_empty()) {
+                sqlx::query(statement).execute(&mut *tx).await?;
+            }
+            sqlx::query("INSERT INTO meta(name,value) VALUES('local_profile',$1)")
+                .bind(serde_json::to_string(&profile)?)
+                .execute(&mut *tx)
+                .await?;
+            integrity::initialize(&mut tx, &profile, &keys).await?;
             tx.commit().await?;
             Ok(())
-        }.await;
+        }
+        .await;
         pool.close().await;
         if let Err(error) = setup {
             let _ = std::fs::remove_file(&path);
@@ -309,7 +322,8 @@ impl Client {
                 .clone()
                 .unwrap_or_else(|| format!("local-{}", Uuid::new_v4()));
         }
-        let unlocked = unlock_candidate(profile, &database, password).await?;
+        let unlocked =
+            unlock_candidate(profile, &database, password, self.dir.join("integrity")).await?;
         if !managed {
             let folder = self.dir.join(&unlocked.profile.id);
             if remembered.is_none() {
@@ -479,19 +493,11 @@ mod tests {
             .unwrap();
         let id = opened["profile"].as_str().unwrap();
         client.lock();
-        let a = original.unlocked().unwrap();
-        let mut p = a.profile.clone();
-        let salt = crypto::random::<16>();
         let new_password = || Zeroizing::new(String::from("changed local vault password"));
-        let key = crypto::password_key(&new_password(), &salt).unwrap();
-        p.local_salt = b64(salt);
-        p.local_root = crypto::seal(
-            key.as_ref(),
-            a._root.as_ref(),
-            &local_context(&p.server_id, &p.account_id),
-        )
-        .unwrap();
-        original.store_profile(&p).unwrap();
+        original
+            .change_local_password(password(), new_password(), None)
+            .await
+            .unwrap();
         original.lock();
         assert!(client.unlock_offline(id, password()).await.is_err());
         client.unlock_offline(id, new_password()).await.unwrap();

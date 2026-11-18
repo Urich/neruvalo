@@ -21,13 +21,22 @@ pub(super) async fn resolve(
         .ok_or(ApiError(StatusCode::NOT_FOUND, "ACCOUNT_NOT_FOUND"))?;
     let b: AccountBundle = decode(&r.get::<String, _>("bundle"))?;
     Ok(Json(
-        json!({"id":r.get::<String,_>("id"),"login":r.get::<String,_>("login"),"public_sign":b.public_sign,"public_share":b.public_share,"fingerprint":crypto::digest(&format!("{}:{}",b.public_sign,b.public_share))}),
+        json!({"id":r.get::<String,_>("id"),"login":r.get::<String,_>("login"),"public_sign":b.public_sign,"public_share":b.public_share,"fingerprint":crypto::public_key_fingerprint(&b.public_sign,&b.public_share)}),
     ))
 }
 pub(super) async fn snapshot(
     tx: &mut Transaction<'_, Any>,
     actor: &str,
 ) -> Result<Value, ApiError> {
+    let budget=sqlx::query("SELECT COUNT(*) AS amount,COALESCE(SUM(length(body)),0) AS bytes FROM shares WHERE (owner=$1 OR recipient=$1) AND state='active'").bind(actor).fetch_one(&mut **tx).await?;
+    if budget.try_get::<i64, _>("amount")? > 10000
+        || budget.try_get::<i64, _>("bytes")? > 24 * 1024 * 1024
+    {
+        return Err(ApiError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "VAULT_RESOURCE_LIMIT",
+        ));
+    }
     let rows=sqlx::query("SELECT s.id,s.copy_id,s.record_id,s.owner,s.recipient,s.state,s.body,a.login,a.bundle,r.sharing_revision FROM shares s JOIN records r ON r.id=s.record_id JOIN accounts a ON a.id=s.recipient WHERE s.owner=$1 AND s.state='active'").bind(actor).fetch_all(&mut **tx).await?;
     let mut outgoing = Vec::new();
     for r in rows {

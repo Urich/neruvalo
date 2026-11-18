@@ -41,7 +41,13 @@ pub fn token() -> String {
     b64(random::<32>())
 }
 pub fn digest(value: &str) -> String {
-    b64(Sha256::digest(value.as_bytes()))
+    digest_bytes(value.as_bytes())
+}
+pub fn public_key_fingerprint(signing_key: &str, sharing_key: &str) -> String {
+    digest(&format!("{signing_key}:{sharing_key}"))
+}
+pub fn digest_bytes(value: &[u8]) -> String {
+    b64(Sha256::digest(value))
 }
 pub fn derive(secret: &[u8], context: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     let mut out = Zeroizing::new([0; 32]);
@@ -50,13 +56,65 @@ pub fn derive(secret: &[u8], context: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
         .map_err(|_| anyhow!("KDF failure"))?;
     Ok(out)
 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PasswordKdf {
+    pub algorithm: String,
+    pub version: u32,
+    pub memory_kib: u32,
+    pub iterations: u32,
+    pub parallelism: u32,
+    pub output_bytes: u32,
+    pub salt: String,
+}
+impl PasswordKdf {
+    pub fn new() -> Self {
+        Self {
+            algorithm: "argon2id".into(),
+            version: 19,
+            memory_kib: 65536,
+            iterations: 3,
+            parallelism: 1,
+            output_bytes: 32,
+            salt: b64(random::<16>()),
+        }
+    }
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.algorithm == "argon2id" && self.version == 19 && self.output_bytes == 32,
+            "UNSUPPORTED_KDF"
+        );
+        ensure!(
+            (65536..=262144).contains(&self.memory_kib)
+                && (3..=10).contains(&self.iterations)
+                && (1..=4).contains(&self.parallelism)
+                && self.memory_kib >= 8 * self.parallelism
+                && self.salt.len() == 22
+                && unb64(&self.salt)?.len() == 16,
+            "INVALID_KDF_PARAMETERS"
+        );
+        Ok(())
+    }
+    pub fn derive(&self, password: &str) -> Result<Zeroizing<[u8; 32]>> {
+        self.validate()?;
+        let params = Params::new(self.memory_kib, self.iterations, self.parallelism, Some(32))
+            .map_err(|_| anyhow!("INVALID_KDF_PARAMETERS"))?;
+        let mut output = Zeroizing::new([0; 32]);
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+            .hash_password_into(password.as_bytes(), &unb64(&self.salt)?, output.as_mut())
+            .map_err(|_| anyhow!("KDF failure"))?;
+        Ok(output)
+    }
+}
+impl Default for PasswordKdf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub fn password_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
-    ensure!(salt.len() == 16, "invalid salt");
-    let mut out = Zeroizing::new([0; 32]);
-    kdf()
-        .hash_password_into(password.as_bytes(), salt, out.as_mut())
-        .map_err(|_| anyhow!("KDF failure"))?;
-    Ok(out)
+    let mut description = PasswordKdf::new();
+    description.salt = b64(salt);
+    description.derive(password)
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Envelope {
@@ -268,5 +326,37 @@ mod shared_signature_vector {
             vector["copy"]["signature"].as_str().unwrap(),
         )
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod password_description_tests {
+    use super::*;
+    #[test]
+    fn kdf_limits_and_unknown_parameters_are_rejected_before_derivation() {
+        for memory in [0, 1, 65535, 262145, u32::MAX] {
+            let mut p = PasswordKdf::new();
+            p.memory_kib = memory;
+            assert!(p.derive("secret").is_err());
+        }
+        for iterations in [0, 1, 2, 11, u32::MAX] {
+            let mut p = PasswordKdf::new();
+            p.iterations = iterations;
+            assert!(p.derive("secret").is_err());
+        }
+        for parallelism in [0, 5, u32::MAX] {
+            let mut p = PasswordKdf::new();
+            p.parallelism = parallelism;
+            assert!(p.derive("secret").is_err());
+        }
+        let mut p = PasswordKdf::new();
+        p.version = 16;
+        assert!(p.derive("secret").is_err());
+        p = PasswordKdf::new();
+        p.algorithm = "argon2d".into();
+        assert!(p.derive("secret").is_err());
+        p = PasswordKdf::new();
+        p.salt = "A".repeat(1024);
+        assert!(p.derive("secret").is_err());
     }
 }

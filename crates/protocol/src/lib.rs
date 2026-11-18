@@ -1,7 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
+pub const DATABASE_SCHEMA: &str = "3";
+pub const SIGNATURE_VERSION: u32 = 2;
+mod integrity;
+pub use integrity::*;
+mod share_contact;
+pub use share_contact::ShareContact;
 pub const PROFILE: &str = "opaque-ristretto255-sha512-argon2id-m65536-t3-p1-v1";
 
 /// Account names use one canonical spelling for lookup, verification and storage.
@@ -51,6 +57,7 @@ pub struct RegisterChallenge {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RegisterFinish {
+    pub manifest: VaultManifest,
     pub ticket: String,
     pub email_code: String,
     pub message: String,
@@ -81,6 +88,7 @@ pub struct LoginResponse {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredVersion {
+    pub signature_version: u32,
     pub operation_id: String,
     pub record_id: String,
     pub version_id: String,
@@ -93,6 +101,10 @@ pub struct StoredVersion {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SaveRecord {
+    pub signature_version: u32,
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<VaultManifest>,
     pub operation_id: String,
     pub record_id: String,
     pub expected_revision: i64,
@@ -138,7 +150,9 @@ pub struct RecoveryFinish {
 // The signature has a fixed, length-delimited field order independent of JSON key order.
 pub fn record_transcript(server: &str, account: &str, request: &SaveRecord) -> Vec<u8> {
     let fields = [
-        "neruvalo-record-v1".to_owned(),
+        "neruvalo-record-v2".to_owned(),
+        request.signature_version.to_string(),
+        request.created_at.to_string(),
         server.into(),
         account.into(),
         request.operation_id.clone(),
@@ -153,6 +167,28 @@ pub fn record_transcript(server: &str, account: &str, request: &SaveRecord) -> V
     for f in fields {
         bytes.extend_from_slice(&(f.len() as u64).to_be_bytes());
         bytes.extend_from_slice(f.as_bytes());
+    }
+    bytes
+}
+pub fn stored_transcript(server: &str, account: &str, version: &StoredVersion) -> Vec<u8> {
+    let fields = [
+        "neruvalo-record-v2".to_owned(),
+        version.signature_version.to_string(),
+        version.created_at.to_string(),
+        server.into(),
+        account.into(),
+        version.operation_id.clone(),
+        version.record_id.clone(),
+        version.version_id.clone(),
+        (version.revision - 1).to_string(),
+        version.previous_version.clone().unwrap_or_default(),
+        version.archived.to_string(),
+        canonical_json(&version.payload),
+    ];
+    let mut bytes = Vec::new();
+    for field in fields {
+        bytes.extend_from_slice(&(field.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(field.as_bytes());
     }
     bytes
 }
@@ -183,6 +219,8 @@ pub fn canonical_json(v: &Value) -> String {
 /// Atomic update of an encrypted subtree. Snapshot contains opaque IDs only.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SaveBatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<VaultManifest>,
     pub operation_id: String,
     pub snapshot: std::collections::BTreeMap<String, i64>,
     pub records: Vec<SaveRecord>,
@@ -194,6 +232,8 @@ pub use sharing::*;
 /// Encrypted vault history import. Existing versions must match exactly.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ImportVault {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<VaultManifest>,
     pub operation_id: String,
     pub versions: Vec<StoredVersion>,
 }

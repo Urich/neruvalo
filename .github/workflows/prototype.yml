@@ -1,7 +1,7 @@
 name: Prototype checks
 on:
   push:
-    branches: ['prototype/**']
+    branches: ['prototype/**', 'fix/database-integrity']
   pull_request:
     branches: [main]
 permissions:

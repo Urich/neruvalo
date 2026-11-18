@@ -1,6 +1,6 @@
 use neruvalo_client::{Client, Profile, RecordData};
 use neruvalo_crypto as crypto;
-use neruvalo_protocol::{SaveRecord, StoredVersion};
+use neruvalo_protocol::{SaveRecord, ShareContact, StoredVersion};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 use tempfile::TempDir;
@@ -259,6 +259,9 @@ async fn server_idempotency_authorization_and_tampered_requests() {
         .unwrap();
     let v: StoredVersion = serde_json::from_value(snap["versions"][0].clone()).unwrap();
     let mut request = SaveRecord {
+        signature_version: v.signature_version,
+        created_at: v.created_at,
+        manifest: Some(serde_json::from_value(snap["manifest"].clone()).unwrap()),
         operation_id: v.operation_id,
         record_id: v.record_id,
         expected_revision: 0,
@@ -299,9 +302,13 @@ async fn server_idempotency_authorization_and_tampered_requests() {
     )
     .unwrap();
     let batch = neruvalo_protocol::SaveBatch {
+        manifest: Some(serde_json::from_value(snapshot["manifest"].clone()).unwrap()),
         operation_id: archived.operation_id.clone(),
         snapshot: BTreeMap::from([(request.record_id.clone(), 1)]),
         records: vec![SaveRecord {
+            signature_version: archived.signature_version,
+            created_at: archived.created_at,
+            manifest: None,
             operation_id: archived.operation_id,
             record_id: archived.record_id,
             expected_revision: 1,
@@ -646,7 +653,47 @@ async fn shared_copies_update_revoke_dismiss_archive_and_offline() {
         .as_str()
         .unwrap()
         .to_owned();
-    owner.share_change("create", &id, "bob").await.unwrap();
+    let bob_contact = bob.account_contact().unwrap();
+    assert!(bob_contact["qr"]
+        .as_str()
+        .unwrap()
+        .starts_with("data:image/svg+xml;base64,"));
+    let server_info: neruvalo_protocol::ServerInfo = reqwest::get(format!("{server}/api/v1/info"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut contact = ShareContact {
+        server_id: "another-server".into(),
+        account_id: bob_contact["account_id"].as_str().unwrap().into(),
+        login: "bob".into(),
+        fingerprint: bob_contact["fingerprint"].as_str().unwrap().into(),
+    };
+    assert_eq!(
+        owner
+            .resolve_share_contact(&contact.encode().unwrap())
+            .await
+            .unwrap_err()
+            .to_string(),
+        "SHARE_CONTACT_OTHER_SERVER"
+    );
+    contact.server_id = server_info.server_id;
+    let code = contact.encode().unwrap();
+    assert_eq!(
+        owner.resolve_share_contact(&code).await.unwrap()["id"],
+        contact.account_id
+    );
+    contact.fingerprint = "different-fingerprint".into();
+    assert_eq!(
+        owner
+            .share_to_contact(&id, &contact.encode().unwrap())
+            .await
+            .unwrap_err()
+            .to_string(),
+        "PUBLIC_KEY_MISMATCH"
+    );
+    owner.share_to_contact(&id, &code).await.unwrap();
     bob.sync().await.unwrap();
     let received = bob.sharing().await.unwrap();
     let copy_id = received["incoming"][0]["record_id"]
@@ -1090,12 +1137,17 @@ async fn incompatible_server_payload_blocks_login_and_locks_sync() {
         &std::fs::read(root.join("client").join(&id).join("profile.json")).unwrap(),
     )
     .unwrap();
-    let local_key =
-        crypto::password_key(&password(), &crypto::unb64(&profile.local_salt).unwrap()).unwrap();
+    let local_key = profile.local_kdf.derive(&password()).unwrap();
     let root_key = crypto::open(
         local_key.as_ref(),
         &profile.local_root,
-        &crypto::account_context(&profile.server_id, &profile.account_id, "local-root"),
+        &serde_json::to_vec(&(
+            "neruvalo-password-envelope-v2",
+            &profile.server_id,
+            &profile.account_id,
+            &profile.local_kdf,
+        ))
+        .unwrap(),
     )
     .unwrap();
     let raw_keys = crypto::open(
@@ -1117,6 +1169,9 @@ async fn incompatible_server_payload_blocks_login_and_locks_sync() {
     let mut version: StoredVersion = serde_json::from_str(&body).unwrap();
     version.payload["format_version"] = serde_json::json!(999);
     let request = SaveRecord {
+        signature_version: version.signature_version,
+        created_at: version.created_at,
+        manifest: None,
         operation_id: version.operation_id.clone(),
         record_id: version.record_id.clone(),
         expected_revision: version.revision - 1,

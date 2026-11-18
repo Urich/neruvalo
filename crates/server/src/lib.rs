@@ -1,4 +1,5 @@
 pub mod config;
+mod integrity;
 mod local_import;
 mod sharing;
 mod verification;
@@ -64,6 +65,8 @@ pub struct AppState {
     recoveries: Mutex<HashMap<String, PendingRecovery>>,
     attempts: Mutex<HashMap<String, (i64, u32)>>,
     verification: Option<verification::Gate>,
+    verified_versions:
+        std::sync::Mutex<std::collections::BTreeMap<String, (String, VerifiedStamp)>>,
 }
 #[derive(Debug)]
 struct ApiError(StatusCode, &'static str);
@@ -73,7 +76,20 @@ impl IntoResponse for ApiError {
     }
 }
 impl From<anyhow::Error> for ApiError {
-    fn from(_: anyhow::Error) -> Self {
+    fn from(error: anyhow::Error) -> Self {
+        let message = error.to_string();
+        if message.contains("VAULT_INTEGRITY") {
+            return Self(StatusCode::CONFLICT, "VAULT_INTEGRITY");
+        }
+        if message.contains("RESOURCE_LIMIT") {
+            return Self(StatusCode::PAYLOAD_TOO_LARGE, "VAULT_RESOURCE_LIMIT");
+        }
+        if message.contains("RECORD_VERSION_MISMATCH") {
+            return conflict();
+        }
+        if message.contains("UNSUPPORTED_SIGNATURE") {
+            return Self(StatusCode::BAD_REQUEST, "UNSUPPORTED_SIGNATURE_FORMAT");
+        }
         Self(StatusCode::BAD_REQUEST, "INVALID_REQUEST")
     }
 }
@@ -122,49 +138,79 @@ async fn application_with_gate(
         .max_connections(5)
         .connect(url)
         .await?;
-    sqlx::raw_sql(
-        "CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY,value TEXT NOT NULL);",
-    )
-    .execute(&pool)
-    .await?;
-    if let Some(row) = sqlx::query("SELECT value FROM metadata WHERE name='schema_version'")
-        .fetch_optional(&pool)
-        .await?
-    {
+    let sqlite = url.starts_with("sqlite:");
+    let tables = if sqlite {
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    } else {
+        "SELECT table_name AS name FROM information_schema.tables WHERE table_schema=current_schema()"
+    };
+    let existing = sqlx::query(tables).fetch_optional(&pool).await?.is_some();
+    if existing {
+        let schema = sqlx::query("SELECT value FROM metadata WHERE name='schema_version'")
+            .fetch_optional(&pool)
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("UNSUPPORTED_DATABASE_SCHEMA: recreate development database")
+            })?;
         ensure!(
-            row.get::<String, _>("value") == "2",
-            "Unsupported database schema"
-        );
-    }
-    sqlx::raw_sql("CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY,login TEXT NOT NULL UNIQUE,email TEXT NOT NULL UNIQUE,registration TEXT NOT NULL,bundle TEXT NOT NULL,timeout_seconds BIGINT NOT NULL DEFAULT 60);
- CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,account TEXT NOT NULL REFERENCES accounts(id),expires BIGINT NOT NULL);
- CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,account TEXT NOT NULL REFERENCES accounts(id),revision BIGINT NOT NULL,version_id TEXT NOT NULL,archived BIGINT NOT NULL,sharing_revision BIGINT NOT NULL DEFAULT 0);
- CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY,record_id TEXT NOT NULL REFERENCES records(id),revision BIGINT NOT NULL,body TEXT NOT NULL,UNIQUE(record_id,revision));
- CREATE TABLE IF NOT EXISTS operations(account TEXT NOT NULL REFERENCES accounts(id),id TEXT NOT NULL,request_hash TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(account,id));
- CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY,copy_id TEXT NOT NULL UNIQUE,record_id TEXT NOT NULL REFERENCES records(id),owner TEXT NOT NULL REFERENCES accounts(id),recipient TEXT NOT NULL REFERENCES accounts(id),state TEXT NOT NULL,body TEXT NOT NULL);
- CREATE INDEX IF NOT EXISTS shares_record ON shares(record_id);
- CREATE INDEX IF NOT EXISTS shares_recipient ON shares(recipient);
- CREATE INDEX IF NOT EXISTS records_account ON records(account);") .execute(&pool).await?;
-    let schema = sqlx::query("SELECT value FROM metadata WHERE name='schema_version'")
-        .fetch_optional(&pool)
-        .await?;
-    if let Some(row) = schema {
-        ensure!(
-            row.get::<String, _>("value") == "2",
-            "Unsupported database schema"
+            schema.is_some_and(|r| r.get::<String, _>("value") == DATABASE_SCHEMA),
+            "UNSUPPORTED_DATABASE_SCHEMA: recreate development database"
         );
     } else {
-        sqlx::query("INSERT INTO metadata(name,value) VALUES('schema_version','2')")
-            .execute(&pool)
+        let mut statements = vec![
+            "CREATE TABLE metadata(name TEXT NOT NULL PRIMARY KEY,value TEXT NOT NULL)".to_owned(),
+            "CREATE TABLE accounts(id TEXT NOT NULL PRIMARY KEY,login TEXT NOT NULL UNIQUE,email TEXT NOT NULL UNIQUE,registration TEXT NOT NULL,bundle TEXT NOT NULL,timeout_seconds BIGINT NOT NULL DEFAULT 60 CHECK(timeout_seconds>=0 AND timeout_seconds<=86400))".into(),
+            "CREATE TABLE sessions(token_hash TEXT NOT NULL PRIMARY KEY,account TEXT NOT NULL REFERENCES accounts(id),expires BIGINT NOT NULL)".into(),
+            "CREATE TABLE records(id TEXT NOT NULL PRIMARY KEY,account TEXT NOT NULL REFERENCES accounts(id),revision BIGINT NOT NULL CHECK(revision>0),version_id TEXT NOT NULL,archived BIGINT NOT NULL CHECK(archived IN(0,1)),sharing_revision BIGINT NOT NULL DEFAULT 0 CHECK(sharing_revision>=0))".into(),
+            "CREATE TABLE versions(id TEXT NOT NULL PRIMARY KEY,record_id TEXT NOT NULL REFERENCES records(id),revision BIGINT NOT NULL CHECK(revision>0),body TEXT NOT NULL,UNIQUE(record_id,revision))".into(),
+            "CREATE TABLE operations(account TEXT NOT NULL REFERENCES accounts(id),id TEXT NOT NULL,request_hash TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(account,id))".into(),
+            "CREATE TABLE shares(id TEXT NOT NULL PRIMARY KEY,copy_id TEXT NOT NULL UNIQUE,record_id TEXT NOT NULL REFERENCES records(id),owner TEXT NOT NULL REFERENCES accounts(id),recipient TEXT NOT NULL REFERENCES accounts(id),state TEXT NOT NULL,body TEXT NOT NULL)".into(),
+            "CREATE TABLE account_manifests(account TEXT NOT NULL PRIMARY KEY REFERENCES accounts(id),body TEXT NOT NULL)".into(),
+            "CREATE TABLE manifest_links(account TEXT NOT NULL REFERENCES accounts(id),generation BIGINT NOT NULL CHECK(generation>0),body TEXT NOT NULL,PRIMARY KEY(account,generation))".into(),
+        ];
+        for statement in &mut statements {
+            for column in ["body", "result", "bundle"] {
+                let check = if sqlite {
+                    format!("{column} TEXT NOT NULL CHECK(json_valid({column}))")
+                } else {
+                    format!("{column} TEXT NOT NULL CHECK(({column}::jsonb) IS NOT NULL)")
+                };
+                *statement = statement.replace(&format!("{column} TEXT NOT NULL"), &check);
+            }
+            if sqlite {
+                *statement = statement.replace("BIGINT", "INTEGER");
+                statement.push_str(" STRICT");
+            }
+        }
+        let mut tx = pool.begin().await?;
+        for statement in statements {
+            sqlx::query(&statement).execute(&mut *tx).await?;
+        }
+        sqlx::raw_sql("CREATE INDEX shares_record ON shares(record_id); CREATE INDEX shares_recipient ON shares(recipient); CREATE INDEX records_account ON records(account);").execute(&mut *tx).await?;
+        for (name, value) in [
+            (
+                "opaque_setup",
+                b64(ServerSetup::<Suite>::new(&mut OsRng).serialize()),
+            ),
+            ("server_id", Uuid::new_v4().to_string()),
+        ] {
+            sqlx::query("INSERT INTO metadata(name,value) VALUES($1,$2)")
+                .bind(name)
+                .bind(value)
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("INSERT INTO metadata(name,value) VALUES('schema_version','3')")
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
     }
-    let setup = metadata(
-        &pool,
-        "opaque_setup",
-        b64(ServerSetup::<Suite>::new(&mut OsRng).serialize()),
-    )
-    .await?;
-    let server_id = metadata(&pool, "server_id", Uuid::new_v4().to_string()).await?;
+    let setup = metadata(&pool, "opaque_setup").await?;
+    let server_id = metadata(&pool, "server_id").await?;
+    ensure!(
+        Uuid::parse_str(&server_id).is_ok(),
+        "VAULT_INTEGRITY: invalid server identity"
+    );
     std::fs::create_dir_all(&outbox)?;
     #[cfg(unix)]
     {
@@ -182,6 +228,7 @@ async fn application_with_gate(
         recoveries: Mutex::default(),
         attempts: Mutex::default(),
         verification: gate,
+        verified_versions: Default::default(),
     });
     Ok(Router::new()
         .route(
@@ -226,17 +273,18 @@ async fn application_with_gate(
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(s))
 }
-async fn metadata(pool: &AnyPool, name: &str, value: String) -> anyhow::Result<String> {
-    sqlx::query("INSERT INTO metadata(name,value) VALUES($1,$2) ON CONFLICT(name) DO NOTHING")
+async fn metadata(pool: &AnyPool, name: &str) -> anyhow::Result<String> {
+    let row = sqlx::query("SELECT value FROM metadata WHERE name=$1")
         .bind(name)
-        .bind(value)
-        .execute(pool)
-        .await?;
-    Ok(sqlx::query("SELECT value FROM metadata WHERE name=$1")
-        .bind(name)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await?
-        .get("value"))
+        .ok_or_else(|| anyhow::anyhow!("VAULT_INTEGRITY: missing server metadata"))?;
+    let value: String = row.try_get("value")?;
+    ensure!(
+        !value.is_empty() && value.len() <= 64 * 1024,
+        "VAULT_INTEGRITY: invalid server metadata"
+    );
+    Ok(value)
 }
 async fn rate(s: &AppState, key: &str) -> Result<(), ApiError> {
     let mut attempts = s.attempts.lock().await;
@@ -341,6 +389,14 @@ async fn register_finish(
     let registration = ServerRegistration::<Suite>::finish(
         RegistrationUpload::deserialize(&unb64(&r.message)?).map_err(|_| invalid())?,
     );
+    r.manifest.verify(
+        &s.server_id,
+        &p.account,
+        &r.bundle.public_sign,
+        &r.bundle.public_share,
+    )?;
+    ensure_api_empty_manifest(&r.manifest)?;
+    let mut tx = s.pool.begin().await?;
     let result = sqlx::query(
         "INSERT INTO accounts(id,login,email,registration,bundle) VALUES($1,$2,$3,$4,$5)",
     )
@@ -349,7 +405,7 @@ async fn register_finish(
     .bind(&p.email)
     .bind(b64(registration.serialize()))
     .bind(ser(&r.bundle)?)
-    .execute(&s.pool)
+    .execute(&mut *tx)
     .await;
     if let Err(e) = result {
         if e.as_database_error()
@@ -359,9 +415,20 @@ async fn register_finish(
         }
         return Err(e.into());
     }
+    integrity::store(&mut tx, &p.account, &r.manifest).await?;
+    tx.commit().await?;
     pending.remove(&r.ticket);
     let _ = std::fs::remove_file(s.outbox.join(format!("{}.txt", r.ticket)));
     Ok(Json(json!({"registered":true})))
+}
+fn ensure_api_empty_manifest(manifest: &VaultManifest) -> Result<(), ApiError> {
+    if manifest.generation != 1
+        || !manifest.records.is_empty()
+        || !manifest.auxiliary_digest.is_empty()
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 fn validate_bundle(b: &AccountBundle) -> Result<(), ApiError> {
     if unb64(&b.public_sign)?.len() != 32 || unb64(&b.public_share)?.len() != 32 {
@@ -531,12 +598,9 @@ async fn snapshot(State(s): State<Arc<AppState>>, h: HeaderMap) -> Api<Value> {
     let id = account(&s, &h).await?;
     let mut tx = s.pool.begin().await?;
     sharing::guard(&mut tx).await?;
-    let rows=sqlx::query("SELECT v.body FROM versions v JOIN records r ON r.id=v.record_id WHERE r.account=$1 ORDER BY v.record_id,v.revision").bind(&id).fetch_all(&mut *tx).await?;
-    let mut versions = Vec::new();
-    for row in rows {
-        let v: StoredVersion = decode(&row.get::<String, _>("body"))?;
-        versions.push(v);
-    }
+    let manifest = integrity::verify(&mut tx, &s, &id).await?;
+    let (_, versions) = integrity::scan(&mut tx, &s, &id, true).await?;
+    let manifest_links = integrity::links(&mut tx, &id).await?;
     let timeout = sqlx::query("SELECT timeout_seconds FROM accounts WHERE id=$1")
         .bind(&id)
         .fetch_one(&mut *tx)
@@ -545,7 +609,7 @@ async fn snapshot(State(s): State<Arc<AppState>>, h: HeaderMap) -> Api<Value> {
     let shares = sharing::snapshot(&mut tx, &id).await?;
     tx.commit().await?;
     Ok(Json(
-        json!({"versions":versions,"timeout_seconds":timeout,"sharing":shares}),
+        json!({"versions":versions,"timeout_seconds":timeout,"sharing":shares,"manifest":manifest,"manifest_links":manifest_links}),
     ))
 }
 async fn operation_result(
@@ -563,7 +627,9 @@ async fn operation_result(
     Ok(Json(decode(&row.get::<String, _>("result"))?))
 }
 async fn validate_save(s: &AppState, actor: &str, r: &SaveRecord) -> Result<(), ApiError> {
-    if r.expected_revision < 0
+    if r.signature_version != SIGNATURE_VERSION
+        || r.created_at < 0
+        || r.expected_revision < 0
         || r.expected_revision == i64::MAX
         || Uuid::parse_str(&r.record_id).is_err()
         || Uuid::parse_str(&r.version_id).is_err()
@@ -576,12 +642,8 @@ async fn validate_save(s: &AppState, actor: &str, r: &SaveRecord) -> Result<(), 
         .fetch_one(&s.pool)
         .await?;
     let bundle: AccountBundle = decode(&row.get::<String, _>("bundle"))?;
-    crypto::verify(
-        &bundle.public_sign,
-        &record_transcript(&s.server_id, actor, r),
-        &r.signature,
-    )
-    .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "INVALID_SIGNATURE"))?;
+    validate_stored_version(&s.server_id, actor, &bundle.public_sign, &r.stored())
+        .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "INVALID_SIGNATURE"))?;
     Ok(())
 }
 async fn apply_save(
@@ -617,6 +679,7 @@ async fn apply_save(
     }
     sharing::apply_updates(tx, actor, r).await?;
     let v = StoredVersion {
+        signature_version: SIGNATURE_VERSION,
         operation_id: r.operation_id.clone(),
         record_id: r.record_id.clone(),
         version_id: r.version_id.clone(),
@@ -625,7 +688,7 @@ async fn apply_save(
         payload: r.payload.clone(),
         signature: r.signature.clone(),
         archived: r.archived,
-        created_at: now(),
+        created_at: r.created_at,
     };
     sqlx::query("INSERT INTO versions(id,record_id,revision,body) VALUES($1,$2,$3,$4)")
         .bind(&v.version_id)
@@ -651,6 +714,7 @@ async fn save_record(
         &ser(&r)?,
         None,
         std::slice::from_ref(&r),
+        r.manifest.as_ref(),
     )
     .await
 }
@@ -678,6 +742,7 @@ async fn save_batch(
         &ser(&r)?,
         Some(&r.snapshot),
         &r.records,
+        r.manifest.as_ref(),
     )
     .await
 }
@@ -688,6 +753,7 @@ async fn commit_records(
     raw: &str,
     snapshot: Option<&std::collections::BTreeMap<String, i64>>,
     records: &[SaveRecord],
+    manifest: Option<&VaultManifest>,
 ) -> Api<Value> {
     let request_hash = crypto::digest(raw);
     let mut tx = s.pool.begin().await?;
@@ -706,6 +772,7 @@ async fn commit_records(
         }
         return Ok(Json(decode(&row.get::<String, _>("result"))?));
     }
+    integrity::verify(&mut tx, s, actor).await?;
     if let Some(expected) = snapshot {
         let rows = sqlx::query("SELECT id,revision FROM records WHERE account=$1")
             .bind(actor)
@@ -723,6 +790,7 @@ async fn commit_records(
     for record in records {
         results.push(apply_save(&mut tx, actor, record).await?);
     }
+    integrity::advance(&mut tx, s, actor, manifest).await?;
     let result = if snapshot.is_none() {
         results.remove(0)
     } else {
@@ -744,10 +812,13 @@ async fn history(
     Path(id): Path<String>,
 ) -> Api<Vec<StoredVersion>> {
     let actor = account(&s, &h).await?;
+    let mut tx = s.pool.begin().await?;
+    sharing::guard(&mut tx).await?;
+    integrity::verify(&mut tx, &s, &actor).await?;
     if sqlx::query("SELECT id FROM records WHERE id=$1 AND account=$2")
         .bind(&id)
         .bind(actor)
-        .fetch_optional(&s.pool)
+        .fetch_optional(&mut *tx)
         .await?
         .is_none()
     {
@@ -755,7 +826,7 @@ async fn history(
     }
     let rows = sqlx::query("SELECT body FROM versions WHERE record_id=$1 ORDER BY revision")
         .bind(id)
-        .fetch_all(&s.pool)
+        .fetch_all(&mut *tx)
         .await?;
     Ok(Json(
         rows.iter()

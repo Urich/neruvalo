@@ -2883,6 +2883,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "futures-util",
  "image",
  "keepass",
  "neruvalo-crypto",
@@ -2944,8 +2945,11 @@ dependencies = [
 name = "neruvalo-protocol"
 version = "0.4.0"
 dependencies = [
+ "anyhow",
+ "neruvalo-crypto",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -2955,6 +2959,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "futures-util",
  "neruvalo-crypto",
  "neruvalo-protocol",
  "opaque-ke",

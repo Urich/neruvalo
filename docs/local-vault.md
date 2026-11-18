@@ -34,9 +34,9 @@ A disappearing file is never replaced by an empty database during opening.
 New vaults are self-contained SQLite files (recommended extension `.nvdb`). The
 existing wrapped-key profile is stored under `meta.local_profile`; passwords and
 private keys are not stored in plaintext. The vault title is derived from the
-filename. Record/file encryption, signed history and schema version 2 are unchanged.
-The older `cache.sqlite3` plus neighboring `profile.json` format is still accepted.
-For that older format both original files must remain together; select either.
+filename. Schema/profile/protocol 3 require an embedded authoritative key profile,
+a signed state manifest and explicit KDF parameters. Older dev formats are rejected
+without migration or deletion. See [database integrity](database-integrity.md).
 `.nvbackup` files continue to use **Restore from backup**.
 
 Opening validates the profile/key identities, SQLite header and schema, record
@@ -52,7 +52,7 @@ Its managed profile folder contains an encrypted key-profile copy and a
 and public signing key. No database is copied into that folder. Reopening the
 same canonical path reuses the remembered profile. Local auto-lock settings remain
 specific to that remembered profile. Every unlock rereads the authoritative key
-profile from the selected database (or the legacy sidecar), so remembered metadata
+profile from the selected database (schema 3 only), so remembered metadata
 does not bypass an updated master-password envelope. A moved or disconnected vault
 is not recreated automatically.
 
@@ -125,8 +125,8 @@ old record payloads are rejected rather than migrated.
 This is a breaking change for both local and server vaults. Recreate test vaults
 and use updated clients for owners and recipients. No database is deleted by the
 application, and no automatic migration or legacy attachment decoder is provided.
-The server API/database schema remains 2 because it stores and signs opaque
-payloads; the inner version payload is now explicitly versioned as 3.
+The inner version payload is explicitly versioned as 3. The subsequent integrity
+remediation also raises server API/database schema to 3; signatures are version 2.
 
 Opening a local vault or an offline server cache first checks the local schema,
 all stored version payload/envelope headers, current record metadata and cached
@@ -206,3 +206,13 @@ metadata access/editing with an unopened invalid file envelope, missing/extra
 blocks, handle forgery and invalidation, history, backup/offline restore, local to
 server transfer and recipient downloads. Cryptographic primitive implementations
 are unchanged; this is a new composition and storage format requiring review.
+
+
+## Database integrity (17 November 2026)
+
+All historical signatures and chains, SQL/JSON headers, full manifest membership
+and protected profile metadata are checked before opening. Local checkpoints detect
+whole-file rollback on a device with a retained anchor. A new device saves its
+first checkpoint on successful open. Reports remain in session memory only. See
+[the current format, recovery rules, limits and measurements](database-integrity.md)
+for the authoritative current behavior; earlier historical format notes are superseded.

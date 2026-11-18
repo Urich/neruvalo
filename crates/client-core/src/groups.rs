@@ -341,6 +341,9 @@ impl Client {
                 ),
             )?;
             let mut save = SaveRecord {
+                signature_version: SIGNATURE_VERSION,
+                created_at: signed_time(),
+                manifest: None,
                 operation_id: operation_id.clone(),
                 record_id: r.record_id.clone(),
                 expected_revision: r.revision,
@@ -362,6 +365,7 @@ impl Client {
             return Ok(json!({"changed":0}));
         }
         let batch = neruvalo_protocol::SaveBatch {
+            manifest: None,
             operation_id,
             snapshot: objects
                 .iter()
@@ -373,12 +377,9 @@ impl Client {
             local::commit(a, &batch.records, Some(&batch.snapshot)).await?;
             return Ok(json!({"changed":batch.records.len()}));
         }
-        set_meta(
-            &a.cache,
-            "pending_operation",
-            &serde_json::to_string(&batch)?,
-        )
-        .await?;
+        let mut batch = serde_json::to_value(&batch)?;
+        integrity::attach_request(a, &mut batch).await?;
+        set_meta(a, "pending_operation", &serde_json::to_string(&batch)?).await?;
         let response = http
             .post(format!("{}/api/v1/records/batch", a.profile.server))
             .bearer_auth(a.token.as_str())
@@ -390,9 +391,7 @@ impl Client {
                 let _: Value = super::response(resp).await?;
             }
             Ok(resp) if resp.status().is_client_error() => {
-                sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
-                    .execute(&a.cache)
-                    .await?;
+                delete_meta(a, "pending_operation").await?;
                 a.needs_sync = true;
                 let _: Value = super::response(resp).await?;
             }
@@ -401,10 +400,8 @@ impl Client {
                 bail!("SAVE_RESULT_UNKNOWN");
             }
         }
-        sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
-            .execute(&a.cache)
-            .await?;
+        delete_meta(a, "pending_operation").await?;
         self.sync().await?;
-        Ok(json!({"changed":batch.records.len()}))
+        Ok(json!({"changed":batch["records"].as_array().map_or(0,Vec::len)}))
     }
 }

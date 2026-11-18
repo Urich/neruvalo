@@ -104,6 +104,9 @@ async fn incompatible_payloads_history_and_content_never_unlock() {
             _ => unreachable!(),
         }
         let request = SaveRecord {
+            signature_version: version.signature_version,
+            created_at: version.created_at,
+            manifest: None,
             operation_id: version.operation_id.clone(),
             record_id: version.record_id.clone(),
             expected_revision: version.revision - 1,

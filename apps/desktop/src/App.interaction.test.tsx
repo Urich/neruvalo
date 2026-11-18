@@ -221,6 +221,120 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 describe("login and local server history", () => {
+  it("opens the network profile from above Imports and shares with a scanned recipient after confirmation", async () => {
+    const stop = vi.fn();
+    const mediaDevices = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(2);
+    vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockReturnValue(480);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    const image = "data:image/jpeg;base64,AAAA";
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(image);
+    const code = "scanned-contact";
+    const qr = "data:image/svg+xml;base64,AAAA";
+    const original = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === "scan_share_contact") {
+        expect(args.frame).toBe(image);
+        return code;
+      }
+      switch (args.request.action) {
+        case "account_contact":
+          return { account_id: "alice-id", fingerprint: "alice-key", qr };
+        case "resolve_share_contact":
+          expect(args.request.code).toBe(code);
+          return { id: "bob-id", login: "bob", public_sign: "sign", public_share: "share", fingerprint: "bob-key" };
+        default:
+          return original(command, args);
+      }
+    });
+    function sends() {
+      return native.invoke.mock.calls.filter(([, args]) => args.request?.action === "share_to_contact");
+    }
+
+    try {
+      await mount();
+      expect(document.querySelector(".account-page")).toBeNull();
+      await login();
+      await click(button(translate("ui.about"), document.querySelector(".sidebar")!));
+      expect(document.querySelector("main")?.textContent).not.toContain("Вернуться в хранилище");
+      const allEntries = [...document.querySelectorAll(".sidebar button span")]
+        .find((label) => label.textContent === translate("ui.allEntries"))!;
+      await click(allEntries.closest("button")!);
+      expect(document.querySelector(".account-identity")).not.toBeNull();
+      const profile = button(translate("ui.accountPage"));
+      expect(profile.nextElementSibling).toBe(button(translate("ui.imports")));
+      await click(profile);
+      const page = document.querySelector(".account-page")!;
+      expect(page.textContent).toContain("alice-id");
+      expect(page.querySelector("img")?.getAttribute("src")).toBe(qr);
+      const help = button(translate("ui.accountContactQr"), page);
+      expect(help.parentElement?.querySelector("h1")?.textContent).toBe(translate("ui.accountPage"));
+      expect(document.querySelector(".page-back")).toBeNull();
+      expect(help.getAttribute("aria-expanded")).toBe("false");
+      expect(page.textContent).not.toContain(translate("ui.accountContactHint"));
+      await click(help);
+      const popup = page.querySelector("#account-qr-help")!;
+      expect(popup.textContent).toContain(translate("ui.accountContactHint"));
+      await click(button(translate("ui.close"), popup));
+      expect(page.querySelector("#account-qr-help")).toBeNull();
+      expect(document.activeElement).toBe(help);
+
+      await click(button(translate("ui.scanShareContact"), page));
+      expect(getUserMedia).toHaveBeenCalledWith({ audio: false, video: { facingMode: { ideal: "environment" } } });
+      expect(stop).toHaveBeenCalled();
+      expect(page.textContent).toContain("bob");
+      await change(page.querySelector("select")!, "One");
+      await click(button(translate("ui.share"), page));
+      const dialog = document.querySelector("dialog.share-dialog")!;
+      expect(dialog.textContent).toContain("bob-key");
+      expect(sends()).toHaveLength(0);
+      await click(button(translate("ui.confirmSharing"), dialog));
+      expect(sends()).toHaveLength(1);
+      expect(sends()[0][1].request).toMatchObject({ expected_profile: "test-profile", id: "One", code });
+    } finally {
+      if (mediaDevices) Object.defineProperty(navigator, "mediaDevices", mediaDevices);
+      else Reflect.deleteProperty(navigator, "mediaDevices");
+    }
+  });
+
+  it("opens a verified vault without a notice when freshness is unconfirmed", async () => {
+    const original = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation(async (command, args) => {
+      const result = await original(command, args);
+      return args.request.action === "status" && result.unlocked
+        ? { ...result, freshness: "unconfirmed" }
+        : result;
+    });
+
+    await mount();
+    await login();
+
+    expect(document.querySelector(".account-identity")).not.toBeNull();
+    expect(document.querySelector("main .notice[role='status']")).toBeNull();
+    expect(document.querySelector("main .error[role='alert']")).toBeNull();
+  });
+
+  it.each([
+    ["VAULT_INTEGRITY", "ui.vaultIntegrityError"],
+    ["VAULT_ROLLBACK", "ui.vaultRollbackDetected"],
+  ])("shows %s when the vault check fails", async (error, message) => {
+    const original = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation(async (command, args) => {
+      if (args.request.action === "login") throw new Error(error);
+      return original(command, args);
+    });
+
+    await mount();
+    await login();
+
+    expect(document.querySelector(".account-identity")).toBeNull();
+    expect(document.querySelector("main .error[role='alert']")?.textContent).toBe(translate(message));
+  });
+
   it("hides vault navigation until sign-in and uses the recent server without contacting it", async () => {
     await mount();
     expect(document.querySelector(".nav-label")).toBeNull();

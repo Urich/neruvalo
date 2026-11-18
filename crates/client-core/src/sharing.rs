@@ -1,15 +1,10 @@
 use super::*;
 use neruvalo_protocol::{share_command_transcript, SharedCopy};
 async fn cached(a: &Unlocked) -> Result<Value> {
-    Ok(
-        match sqlx::query("SELECT value FROM meta WHERE name='sharing'")
-            .fetch_optional(&a.cache)
-            .await?
-        {
-            Some(r) => serde_json::from_str(&r.get::<String, _>("value"))?,
-            None => json!({"incoming":[],"outgoing":[],"revisions":{}}),
-        },
-    )
+    Ok(match integrity::get_meta(a, "sharing").await? {
+        Some(r) => serde_json::from_str(&r)?,
+        None => json!({"incoming":[],"outgoing":[],"revisions":{}}),
+    })
 }
 fn content(data: &RecordData) -> Value {
     let mut value = json!({"record_type":data.record_type,"schema_version":data.schema_version,"title":data.title,"fields":data.fields,"notes":data.notes});
@@ -227,11 +222,8 @@ pub(super) async fn validate_cached_formats(a: &Unlocked) -> Result<()> {
 pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<Value> {
     validate_copy_set(state)?;
     let old = cached(a).await?;
-    let guard: Value = match sqlx::query("SELECT value FROM meta WHERE name='share_guard'")
-        .fetch_optional(&a.cache)
-        .await?
-    {
-        Some(row) => serde_json::from_str(&row.get::<String, _>("value"))?,
+    let guard: Value = match integrity::get_meta(a, "share_guard").await? {
+        Some(row) => serde_json::from_str(&row)?,
         None => json!({}),
     };
     let incoming_guard = advance_guard(state, &guard["incoming"])?;
@@ -243,14 +235,10 @@ pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<Value
     }
     let outgoing_guard = advance_guard(&json!({"incoming":state["outgoing"]}), &guard["outgoing"])?;
     let next_guard = json!({"incoming":incoming_guard,"outgoing":outgoing_guard});
-    let mut pins: BTreeMap<String, String> =
-        match sqlx::query("SELECT value FROM meta WHERE name='share_pins'")
-            .fetch_optional(&a.cache)
-            .await?
-        {
-            Some(r) => serde_json::from_str(&r.get::<String, _>("value"))?,
-            None => BTreeMap::new(),
-        };
+    let mut pins: BTreeMap<String, String> = match integrity::get_meta(a, "share_pins").await? {
+        Some(r) => serde_json::from_str(&r)?,
+        None => BTreeMap::new(),
+    };
     for item in state["incoming"]
         .as_array()
         .ok_or_else(|| anyhow!("INVALID_SHARED_SNAPSHOT"))?
@@ -284,7 +272,7 @@ pub(super) async fn verify_snapshot(a: &Unlocked, state: &Value) -> Result<Value
             );
         }
     }
-    set_meta(&a.cache, "share_pins", &serde_json::to_string(&pins)?).await?;
+    set_meta(a, "share_pins", &serde_json::to_string(&pins)?).await?;
     Ok(next_guard)
 }
 impl Client {
@@ -304,13 +292,53 @@ impl Client {
         }
         Ok(json!({"incoming":incoming,"outgoing":state["outgoing"]}))
     }
+    pub fn account_contact(&mut self) -> Result<Value> {
+        let a = self.unlocked()?;
+        ensure!(
+            a.profile.kind == ProfileKind::Server,
+            "ONLINE_LOGIN_REQUIRED"
+        );
+        let contact = ShareContact {
+            server_id: a.profile.server_id.clone(),
+            account_id: a.profile.account_id.clone(),
+            login: normalize_login(&a.profile.login),
+            fingerprint: crypto::public_key_fingerprint(
+                &a.profile.bundle.public_sign,
+                &a.profile.bundle.public_share,
+            ),
+        };
+        let qr = qr::render(contact.encode()?.as_bytes())
+            .map_err(|_| anyhow!("INVALID_SHARE_CONTACT"))?;
+        Ok(json!({"account_id":contact.account_id,"fingerprint":contact.fingerprint,"qr":qr}))
+    }
+
     pub async fn resolve_recipient(&mut self, login: &str) -> Result<Value> {
+        self.resolve_recipient_for(login, None).await
+    }
+
+    pub async fn resolve_share_contact(&mut self, code: &str) -> Result<Value> {
+        let contact = ShareContact::decode(code).ok_or_else(|| anyhow!("INVALID_SHARE_CONTACT"))?;
+        self.resolve_recipient_for(&contact.login, Some(&contact))
+            .await
+    }
+
+    async fn resolve_recipient_for(
+        &mut self,
+        login: &str,
+        contact: Option<&ShareContact>,
+    ) -> Result<Value> {
         let normalized_login = normalize_login(login);
         let login = normalized_login.as_str();
         ensure!(valid_account_login(login), "INVALID_LOGIN");
         let http = self.http.clone();
         let a = self.unlocked()?;
         ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
+        if let Some(contact) = contact {
+            ensure!(
+                contact.server_id == a.profile.server_id,
+                "SHARE_CONTACT_OTHER_SERVER"
+            );
+        }
         let recipient: Value = response(
             http.get(format!("{}/api/v2/accounts/{}", a.profile.server, login))
                 .bearer_auth(a.token.as_str())
@@ -322,16 +350,26 @@ impl Client {
             recipient["id"].as_str() != Some(&a.profile.account_id),
             "CANNOT_SHARE_WITH_SELF"
         );
+        if let Some(contact) = contact {
+            let sign = recipient["public_sign"]
+                .as_str()
+                .ok_or_else(|| anyhow!("INVALID_RECIPIENT"))?;
+            let share = recipient["public_share"]
+                .as_str()
+                .ok_or_else(|| anyhow!("INVALID_RECIPIENT"))?;
+            ensure!(
+                recipient["id"].as_str() == Some(contact.account_id.as_str())
+                    && crypto::public_key_fingerprint(sign, share) == contact.fingerprint,
+                "PUBLIC_KEY_MISMATCH"
+            );
+        }
         let mut pins: BTreeMap<String, String> =
-            match sqlx::query("SELECT value FROM meta WHERE name='recipient_pins'")
-                .fetch_optional(&a.cache)
-                .await?
-            {
-                Some(r) => serde_json::from_str(&r.get::<String, _>("value"))?,
+            match integrity::get_meta(a, "recipient_pins").await? {
+                Some(r) => serde_json::from_str(&r)?,
                 None => BTreeMap::new(),
             };
         pin_recipient(&mut pins, login, &recipient)?;
-        set_meta(&a.cache, "recipient_pins", &serde_json::to_string(&pins)?).await?;
+        set_meta(a, "recipient_pins", &serde_json::to_string(&pins)?).await?;
         Ok(recipient)
     }
     pub async fn share_change(
@@ -340,12 +378,28 @@ impl Client {
         id: &str,
         login_or_share: &str,
     ) -> Result<Value> {
+        self.change_share(kind, id, login_or_share, None).await
+    }
+
+    pub async fn share_to_contact(&mut self, id: &str, code: &str) -> Result<Value> {
+        let contact = ShareContact::decode(code).ok_or_else(|| anyhow!("INVALID_SHARE_CONTACT"))?;
+        self.change_share("create", id, &contact.login, Some(&contact))
+            .await
+    }
+
+    async fn change_share(
+        &mut self,
+        kind: &str,
+        id: &str,
+        login_or_share: &str,
+        contact: Option<&ShareContact>,
+    ) -> Result<Value> {
         ensure!(
             ["create", "revoke", "dismiss"].contains(&kind),
             "INVALID_SHARE_OPERATION"
         );
         let recipient = if kind == "create" {
-            Some(self.resolve_recipient(login_or_share).await?)
+            Some(self.resolve_recipient_for(login_or_share, contact).await?)
         } else {
             None
         };
@@ -355,10 +409,7 @@ impl Client {
         ensure!(a.online && !a.token.is_empty(), "OFFLINE_READ_ONLY");
         ensure!(!a.needs_sync, "SYNCHRONIZATION_REQUIRED");
         ensure!(
-            sqlx::query("SELECT value FROM meta WHERE name='pending_operation'")
-                .fetch_optional(&a.cache)
-                .await?
-                .is_none(),
+            integrity::get_meta(a, "pending_operation").await?.is_none(),
             "SAVE_RESULT_UNKNOWN"
         );
         let state = cached(a).await?;
@@ -419,12 +470,7 @@ impl Client {
             &a.profile.account_id,
             &request
         )));
-        set_meta(
-            &a.cache,
-            "pending_operation",
-            &serde_json::to_string(&request)?,
-        )
-        .await?;
+        set_meta(a, "pending_operation", &serde_json::to_string(&request)?).await?;
         let resp = http
             .post(format!("{}/api/v2/shares/change", a.profile.server))
             .bearer_auth(a.token.as_str())
@@ -436,9 +482,7 @@ impl Client {
                 let _: Value = response(resp).await?;
             }
             Ok(resp) if resp.status().is_client_error() => {
-                sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
-                    .execute(&a.cache)
-                    .await?;
+                delete_meta(a, "pending_operation").await?;
                 a.needs_sync = true;
                 let _: Value = response(resp).await?;
             }
@@ -447,9 +491,7 @@ impl Client {
                 bail!("SAVE_RESULT_UNKNOWN");
             }
         }
-        sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
-            .execute(&a.cache)
-            .await?;
+        delete_meta(a, "pending_operation").await?;
         self.sync().await?;
         Ok(json!({"changed":true}))
     }

@@ -19,7 +19,8 @@ import { About } from "./About";
 import { TypePicker } from "./TypePicker";
 import { generatePassword, normalizeGenerator } from "./passwordGenerator";
 import { DismissShare } from "./DismissShare";
-import { ShareDialog, Recipient } from "./ShareDialog";
+import { ShareDialog, Recipient, VerifiedContact } from "./ShareDialog";
+import { AccountPage } from "./AccountPage";
 import { LocalVaultTools } from "./LocalVaultTools";
 import { Settings } from "./Settings";
 import { Imports } from "./Imports";
@@ -70,7 +71,7 @@ export default function App() {
     normalizeGenerator(readLocal("neruvalo.generator", null)),
   );
   const [transferSource, setTransferSource] = useState("");
-  const [page, setPage] = useState<"vault" | "imports" | "settings" | "about">("vault");
+  const [page, setPage] = useState<"vault" | "account" | "imports" | "settings" | "about">("vault");
   const [treeReveal, setTreeReveal] = useState(0);
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
@@ -134,7 +135,7 @@ export default function App() {
   const [received, setReceived] = useState<Entry[]>([]);
   const [outgoing, setOutgoing] = useState<any[]>([]);
   const [dismissTarget, setDismissTarget] = useState<Entry | null>(null);
-  const [shareTarget, setShareTarget] = useState<Entry | null>(null);
+  const [shareTarget, setShareTarget] = useState<{ entry: Entry; contact?: VerifiedContact } | null>(null);
   const [selected, setSelected] = useState<Entry>();
   const [draft, setDraft] = useState<Data>();
   const [pendingNew, setPendingNew] = useState<{
@@ -207,13 +208,13 @@ export default function App() {
     setCertReady(false);
   };
   async function rejectUnsupportedVault(error: unknown) {
-    if (!isUnsupportedVaultFormat(error)) return false;
+    if (!isUnsupportedVaultFormat(error) && !/VAULT_INTEGRITY|VAULT_ROLLBACK|VAULT_RESOURCE_LIMIT/.test(String(error))) return false;
     await call("lock").catch(() => {});
     // clear() also advances the generation, invalidating pending secret-bearing responses.
     clear();
     setTransferSource("");
     setMode("login");
-    setError("ui.unsupportedVaultFormat");
+    setError(errorText(error));
     return true;
   }
   async function run(task: () => Promise<void>) {
@@ -590,7 +591,7 @@ export default function App() {
         items.push({
           label: t("ui.share"),
           disabled: busy || !status.online || needsSync || record.archived,
-          action: safe(() => requestLeave(() => setShareTarget(record))),
+          action: safe(() => requestLeave(() => setShareTarget({ entry: record }))),
         });
         items.push(
           {
@@ -898,6 +899,9 @@ export default function App() {
     status.server ??
     profiles.find((p) => p.id === status.profile)?.server ??
     "";
+  const networkProfile = status.unlocked && !status.local ? status.profile : undefined;
+  const canShare = !!networkProfile && !!status.online && !busy && !needsSync;
+  const resolveContact = (code: string) => call<Recipient>("resolve_share_contact", { code });
   const currentType = types[(draft ?? selected?.data)?.record_type ?? "login"];
   const localTools = (<LocalVaultTools
         onUnsupportedVault={rejectUnsupportedVault}
@@ -947,26 +951,26 @@ export default function App() {
       )}
       {shareTarget && status.unlocked && (
         <ShareDialog
-          title={shareTarget.data.title}
-          wallet={shareTarget.data.record_type === "crypto_wallet"}
+          title={shareTarget.entry.data.title}
+          wallet={shareTarget.entry.data.record_type === "crypto_wallet"}
           recipients={outgoing.filter(
-            (g) => g.record_id === shareTarget.record_id,
+            (g) => g.record_id === shareTarget.entry.record_id,
           )}
-          disabled={busy || !status.online || needsSync}
+          disabled={!canShare}
           onClose={() => setShareTarget(null)}
           onResolve={(login) => call<Recipient>("resolve_recipient", { login })}
-          onCreate={async (login) => {
-            await call("share_change", {
-              kind: "create",
-              id: shareTarget.record_id,
-              target: login,
-            });
+          resolveContact={resolveContact}
+          initialContact={shareTarget.contact}
+          onCreate={async (login, code) => {
+            const id = shareTarget.entry.record_id;
+            if (code) await call("share_to_contact", { id, code });
+            else await call("share_change", { kind: "create", id, target: login });
             await refresh();
           }}
           onRevoke={async (id) => {
             await call("share_change", {
               kind: "revoke",
-              id: shareTarget.record_id,
+              id: shareTarget.entry.record_id,
               target: id,
             });
             await refresh();
@@ -1030,7 +1034,7 @@ export default function App() {
         {status.unlocked && (
           <>
             <button
-              className={!archive && shareView === "own" ? "nav active" : "nav"}
+              className={page === "vault" && !archive && shareView === "own" ? "nav active" : "nav"}
               onClick={() => {
                 requestLeave(() => {
                   setPage("vault");
@@ -1048,7 +1052,7 @@ export default function App() {
               <b>{displayedEntries.filter((e) => !e.archived).length}</b>
             </button>
             <button
-              className={archive ? "nav active" : "nav"}
+              className={page === "vault" && archive ? "nav active" : "nav"}
               onClick={() => {
                 requestLeave(() => {
                   setPage("vault");
@@ -1068,7 +1072,7 @@ export default function App() {
                 aria-label={t(
                   view === "outgoing" ? "ui.sharedByMe" : "ui.received",
                 )}
-                className={shareView === view ? "nav active" : "nav"}
+                className={page === "vault" && shareView === view ? "nav active" : "nav"}
                 onClick={() =>
                   requestLeave(() => {
                     setShareView(view);
@@ -1097,7 +1101,7 @@ export default function App() {
             {Object.entries(types).map(([key]) => (
               <button
                 key={key}
-                className={kind === key ? "nav active" : "nav"}
+                className={page === "vault" && kind === key ? "nav active" : "nav"}
                 onClick={() => {
                   setPage("vault");
                   setKind(kind === key ? "" : key);
@@ -1117,6 +1121,13 @@ export default function App() {
           </>
         )}
         <div className="sidebar-bottom">
+          {networkProfile && (
+            <button className={page === "account" ? "nav active" : "nav"}
+              aria-current={page === "account" ? "page" : undefined}
+              onClick={() => requestLeave(() => setPage("account"))}>
+              <Icon name="account" /><span>{t("ui.accountPage")}</span>
+            </button>
+          )}
           <button className={page === "imports" ? "nav active" : "nav"}
             aria-current={page === "imports" ? "page" : undefined}
             onClick={() => requestLeave(() => setPage("imports"))}>
@@ -1151,7 +1162,7 @@ export default function App() {
         <header className={status.unlocked ? "vault-toolbar" : undefined}>
           <div className="breadcrumb">
             {t("ui.personalSpace")}
-            <span>/</span> {page === "imports" ? t("ui.imports") : archive ? t("ui.archive") : t("ui.vault")}
+            <span>/</span> {t(page === "account" ? "ui.accountPage" : page === "imports" ? "ui.imports" : archive ? "ui.archive" : "ui.vault")}
           </div>
           <div className="connection">
             <i className={status.online ? "online" : ""} />
@@ -1188,19 +1199,6 @@ export default function App() {
           )}
         </header>
         <div className="content">
-          {status.unlocked && page === "about" && (
-            <button
-              type="button"
-              className="secondary page-back"
-              onClick={() => setPage("vault")}
-            >
-              {t(
-                status.unlocked
-                  ? "ui.backToVault"
-                  : "ui.backToSignIn",
-              )}
-            </button>
-          )}
           {error && (
             <div className="banner error" role="alert">
               {t(error)}
@@ -1213,6 +1211,10 @@ export default function App() {
           )}
           {page === "about" ? (
             <About />
+          ) : page === "account" && networkProfile ? (
+            <AccountPage key={networkProfile} profile={networkProfile} login={status.login ?? ""}
+              server={activeServer} canShare={canShare} records={entries} resolveContact={resolveContact}
+              onShare={(entry, contact) => setShareTarget({ entry, contact })} />
           ) : page === "imports" ? (
             <Imports onUnsupportedVault={rejectUnsupportedVault} status={status} profiles={profiles} source={transferSource} busy={busy || needsSync}
               onSource={setTransferSource} onChanged={async () => { await refresh(); setProfiles(await call("profiles")); }} />
@@ -1979,7 +1981,7 @@ export default function App() {
                               needsSync ||
                               selected.archived
                             }
-                            onClick={() => setShareTarget(selected)}
+                            onClick={() => setShareTarget({ entry: selected })}
                           >
                             {t("ui.share")}
                             {selected.share_count

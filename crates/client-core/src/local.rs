@@ -1,19 +1,24 @@
 use super::*;
 use std::collections::BTreeSet;
 
-const BACKUP_CONTEXT: &[u8] = b"neruvalo-local-backup-v1";
+fn backup_context(kdf: &crypto::PasswordKdf) -> Vec<u8> {
+    serde_json::to_vec(&("neruvalo-local-backup-v2", kdf)).expect("backup context")
+}
 
 #[derive(Serialize, Deserialize)]
 struct Backup {
     format: String,
     version: u32,
-    salt: String,
+    kdf: crypto::PasswordKdf,
     envelope: Envelope,
 }
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     profile: Profile,
     versions: Vec<StoredVersion>,
+    manifest: VaultManifest,
+    links: Vec<ManifestLink>,
+    metadata: BTreeMap<String, String>,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Transfer {
@@ -21,15 +26,11 @@ struct Transfer {
     versions: BTreeMap<String, StoredVersion>,
     fingerprint: String,
     operation: String,
+    manifest: Option<VaultManifest>,
 }
 
 async fn versions(a: &Unlocked) -> Result<Vec<StoredVersion>> {
-    sqlx::query("SELECT body FROM versions ORDER BY record_id,revision")
-        .fetch_all(&a.cache)
-        .await?
-        .into_iter()
-        .map(|r| Ok(serde_json::from_str(&r.get::<String, _>("body"))?))
-        .collect()
+    integrity::read(a, None, true).await
 }
 
 /// Apply all local changes in one transaction, including subtree archive changes.
@@ -43,6 +44,13 @@ pub(super) async fn commit(
     sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
         .execute(&mut *tx)
         .await?;
+    let previous_manifest = integrity::verify_cached(&mut tx, a).await?;
+    integrity::check_anchor(
+        a,
+        "cache",
+        &previous_manifest,
+        &integrity::links(&mut tx).await?,
+    )?;
     if let Some(expected) = snapshot {
         let rows = sqlx::query(
             "SELECT record_id,MAX(revision) AS revision FROM versions GROUP BY record_id",
@@ -71,6 +79,7 @@ pub(super) async fn commit(
             "RECORD_VERSION_MISMATCH"
         );
         let v = StoredVersion {
+            signature_version: r.signature_version,
             operation_id: r.operation_id.clone(),
             record_id: r.record_id.clone(),
             version_id: r.version_id.clone(),
@@ -79,9 +88,7 @@ pub(super) async fn commit(
             payload: r.payload.clone(),
             signature: r.signature.clone(),
             archived: r.archived,
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_secs() as i64,
+            created_at: r.created_at,
         };
         verify_version(&a.profile, &v)?;
         sqlx::query("INSERT INTO versions(id,record_id,revision,body) VALUES($1,$2,$3,$4)")
@@ -92,7 +99,9 @@ pub(super) async fn commit(
             .execute(&mut *tx)
             .await?;
     }
+    integrity::refresh(&mut tx, a, &previous_manifest).await?;
     tx.commit().await?;
+    integrity::checkpoint(a).await?;
     let r = records.first().ok_or_else(|| anyhow!("EMPTY_OPERATION"))?;
     Ok(json!({"record_id":r.record_id,"version_id":r.version_id,"revision":r.expected_revision+1}))
 }
@@ -112,8 +121,8 @@ pub(super) fn new_profile(
     let id = format!("local-{}", Uuid::new_v4());
     let root = Zeroizing::new(crypto::random::<32>());
     let keys = AccountKeys::generate();
-    let salt = crypto::random::<16>();
-    let password_key = crypto::password_key(password, &salt)?;
+    let local_kdf = crypto::PasswordKdf::new();
+    let password_key = local_kdf.derive(password)?;
     let keys_envelope = crypto::seal(
         root.as_ref(),
         &Zeroizing::new(serde_json::to_vec(&keys)?),
@@ -133,11 +142,12 @@ pub(super) fn new_profile(
             public_share: keys.public_share(),
             recovery: None,
         },
-        local_salt: b64(salt),
+        format_version: 3,
+        local_kdf: local_kdf.clone(),
         local_root: crypto::seal(
             password_key.as_ref(),
             root.as_ref(),
-            &local_context("local", &id),
+            &local_context("local", &id, &local_kdf),
         )?,
         timeout_seconds: 300,
     };
@@ -148,10 +158,8 @@ impl Client {
     pub async fn create_local(&mut self, name: &str, password: Zeroizing<String>) -> Result<Value> {
         let (profile, keys, root) = new_profile(name, &password)?;
         let id = profile.id.clone();
-        let db = cache(&self.dir, &id).await?;
-        self.store_profile(&profile)?;
-        self.lock();
-        self.active = Some(Unlocked {
+        let db = cache(&self.dir, &id, Some((&profile, &keys))).await?;
+        let opened = Unlocked {
             profile,
             keys,
             _root: root,
@@ -162,8 +170,71 @@ impl Client {
             needs_sync: false,
             index_cache: BTreeMap::new(),
             attachment_handles: attachments::Handles::default(),
-        });
+            reports: Default::default(),
+            last_report: Default::default(),
+            checkpoint_dir: self.dir.join("integrity"),
+            freshness: "confirmed".into(),
+            verified_versions: Default::default(),
+        };
+        integrity::checkpoint(&opened).await?;
+        self.store_profile(&opened.profile)?;
+        self.lock();
+        self.active = Some(opened);
         Ok(self.status())
+    }
+
+    /// Rewrap only the root key; record keys, signatures and history stay unchanged.
+    pub async fn change_local_password(
+        &mut self,
+        current: Zeroizing<String>,
+        next: Zeroizing<String>,
+        parameters: Option<crypto::PasswordKdf>,
+    ) -> Result<()> {
+        let a = self.unlocked()?;
+        ensure!(
+            a.profile.kind == ProfileKind::Local,
+            "LOCAL_PROFILE_REQUIRED"
+        );
+        ensure!(
+            next.len() >= 12,
+            "Use a master password of at least 12 characters"
+        );
+        let mut tx = a.cache.begin().await?;
+        sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
+            .execute(&mut *tx)
+            .await?;
+        let previous = integrity::verify_cached(&mut tx, a).await?;
+        let row = sqlx::query("SELECT value FROM meta WHERE name='local_profile'")
+            .fetch_one(&mut *tx)
+            .await?;
+        let mut profile = decode_profile(row.try_get::<String, _>("value")?.as_bytes())?;
+        profile.id = a.profile.id.clone();
+        profile.timeout_seconds = a.profile.timeout_seconds;
+        let old_key = profile.local_kdf.derive(&current)?;
+        let root = crypto::open(
+            old_key.as_ref(),
+            &profile.local_root,
+            &local_context(&profile.server_id, &profile.account_id, &profile.local_kdf),
+        )?;
+        ensure!(root.as_slice() == a._root.as_ref(), "INVALID_PASSWORD");
+        profile.local_kdf = parameters.unwrap_or_default();
+        profile.local_kdf.salt = b64(crypto::random::<16>());
+        let key = profile.local_kdf.derive(&next)?;
+        profile.local_root = crypto::seal(
+            key.as_ref(),
+            a._root.as_ref(),
+            &local_context(&profile.server_id, &profile.account_id, &profile.local_kdf),
+        )?;
+        sqlx::query("UPDATE meta SET value=$1 WHERE name='local_profile'")
+            .bind(serde_json::to_string(&profile)?)
+            .execute(&mut *tx)
+            .await?;
+        integrity::refresh(&mut tx, a, &previous).await?;
+        tx.commit().await?;
+        integrity::checkpoint(a).await?;
+        a.profile = profile.clone();
+        self.store_profile(&profile)?;
+        Ok(())
     }
 
     pub async fn export_local_backup(
@@ -176,26 +247,36 @@ impl Client {
             a.profile.kind == ProfileKind::Local,
             "LOCAL_PROFILE_REQUIRED"
         );
-        // Authenticate the supplied password before using it to protect a backup.
-        let local = crypto::password_key(&password, &unb64(&a.profile.local_salt)?)?;
+        let (manifest, links, versions, mut metadata) = integrity::backup_snapshot(a).await?;
+        let profile = decode_profile(
+            metadata
+                .remove("local_profile")
+                .ok_or_else(|| anyhow!("VAULT_INTEGRITY: missing embedded profile"))?
+                .as_bytes(),
+        )?;
+        // Authenticate against the profile from the same snapshot as the backup.
+        let local = profile.local_kdf.derive(&password)?;
         let root = Zeroizing::new(crypto::open(
             local.as_ref(),
-            &a.profile.local_root,
-            &local_context(&a.profile.server_id, &a.profile.account_id),
+            &profile.local_root,
+            &local_context(&profile.server_id, &profile.account_id, &profile.local_kdf),
         )?);
         ensure!(root.as_slice() == a._root.as_ref(), "INVALID_PASSWORD");
         let snapshot = Snapshot {
-            profile: a.profile.clone(),
-            versions: versions(a).await?,
+            manifest,
+            links,
+            profile,
+            versions,
+            metadata,
         };
-        let salt = crypto::random::<16>();
-        let key = crypto::password_key(&password, &salt)?;
+        let kdf = crypto::PasswordKdf::new();
+        let key = kdf.derive(&password)?;
         let raw = Zeroizing::new(serde_json::to_vec(&snapshot)?);
         let backup = Backup {
             format: "neruvalo-local-backup".into(),
-            version: 1,
-            salt: b64(salt),
-            envelope: crypto::seal(key.as_ref(), &raw, BACKUP_CONTEXT)?,
+            version: 2,
+            envelope: crypto::seal(key.as_ref(), &raw, &backup_context(&kdf))?,
+            kdf,
         };
         // Never overwrite an existing backup or the active profile through a file picker.
         let mut options = std::fs::OpenOptions::new();
@@ -223,27 +304,34 @@ impl Client {
             std::fs::metadata(path)?.len() <= 64 * 1024 * 1024,
             "BACKUP_TOO_LARGE"
         );
-        let backup: Backup = serde_json::from_slice(&std::fs::read(path)?)?;
+        let raw = read_limited(path, 64 * 1024 * 1024)?;
+        let header: Value = serde_json::from_slice(&raw).map_err(|_| anyhow!("INVALID_BACKUP"))?;
         ensure!(
-            backup.format == "neruvalo-local-backup" && backup.version == 1,
+            header["format"] == "neruvalo-local-backup" && header["version"] == 2,
             "UNSUPPORTED_BACKUP"
         );
-        let key = crypto::password_key(&password, &unb64(&backup.salt)?)?;
+        let backup: Backup =
+            serde_json::from_value(header).map_err(|_| anyhow!("INVALID_BACKUP"))?;
+        let key = backup.kdf.derive(&password)?;
         let raw = Zeroizing::new(crypto::open(
             key.as_ref(),
             &backup.envelope,
-            BACKUP_CONTEXT,
+            &backup_context(&backup.kdf),
         )?);
         let mut snapshot: Snapshot = serde_json::from_slice(&raw)?;
         ensure!(
             snapshot.profile.kind == ProfileKind::Local && snapshot.profile.server.is_empty(),
             "INVALID_BACKUP"
         );
-        let local = crypto::password_key(&password, &unb64(&snapshot.profile.local_salt)?)?;
+        let local = snapshot.profile.local_kdf.derive(&password)?;
         let root = crypto::parse_key(&crypto::open(
             local.as_ref(),
             &snapshot.profile.local_root,
-            &local_context(&snapshot.profile.server_id, &snapshot.profile.account_id),
+            &local_context(
+                &snapshot.profile.server_id,
+                &snapshot.profile.account_id,
+                &snapshot.profile.local_kdf,
+            ),
         )?)?;
         let raw_keys = Zeroizing::new(crypto::open(
             root.as_ref(),
@@ -256,9 +344,29 @@ impl Client {
                 && keys.public_share() == snapshot.profile.bundle.public_share,
             "PUBLIC_KEY_MISMATCH"
         );
+        ensure!(
+            snapshot.profile.format_version == 3,
+            "UNSUPPORTED_LOCAL_SCHEMA"
+        );
+        snapshot.manifest.verify(
+            &snapshot.profile.server_id,
+            &snapshot.profile.account_id,
+            &snapshot.profile.bundle.public_sign,
+            &snapshot.profile.bundle.public_share,
+        )?;
+        let state = VerifiedHistory::from_versions(
+            &snapshot.profile.server_id,
+            &snapshot.profile.account_id,
+            &snapshot.profile.bundle.public_sign,
+            &snapshot.versions,
+        )?;
+        ensure!(
+            snapshot.manifest.records == state.records,
+            "VAULT_INTEGRITY: incomplete backup"
+        );
         // A restore is a new local profile; existing profiles are never replaced.
         snapshot.profile.id = format!("local-{}", Uuid::new_v4());
-        let db = cache(&self.dir, &snapshot.profile.id).await?;
+        let db = cache(&self.dir, &snapshot.profile.id, None).await?;
         let restored = Unlocked {
             profile: snapshot.profile,
             keys,
@@ -270,6 +378,11 @@ impl Client {
             needs_sync: false,
             index_cache: BTreeMap::new(),
             attachment_handles: attachments::Handles::default(),
+            reports: Default::default(),
+            last_report: Default::default(),
+            checkpoint_dir: self.dir.join("integrity"),
+            freshness: "unconfirmed".into(),
+            verified_versions: Default::default(),
         };
         let mut chains = BTreeMap::<String, (i64, String)>::new();
         let mut ids = BTreeSet::new();
@@ -285,6 +398,9 @@ impl Client {
             chains.insert(v.record_id.clone(), (v.revision, v.version_id.clone()));
         }
         let mut tx = restored.cache.begin().await?;
+        for statement in CACHE_SCHEMA.split(';').filter(|s| !s.trim().is_empty()) {
+            sqlx::query(statement).execute(&mut *tx).await?;
+        }
         for v in &snapshot.versions {
             sqlx::query("INSERT INTO versions(id,record_id,revision,body) VALUES($1,$2,$3,$4)")
                 .bind(&v.version_id)
@@ -294,7 +410,40 @@ impl Client {
                 .execute(&mut *tx)
                 .await?;
         }
+        sqlx::query("INSERT INTO meta(name,value) VALUES('local_profile',$1)")
+            .bind(serde_json::to_string(&restored.profile)?)
+            .execute(&mut *tx)
+            .await?;
+        for (name, value) in &snapshot.metadata {
+            ensure!(
+                !["schema_version", "manifest", "local_profile"].contains(&name.as_str()),
+                "INVALID_BACKUP"
+            );
+            sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2)")
+                .bind(name)
+                .bind(value)
+                .execute(&mut *tx)
+                .await?;
+        }
+        integrity::write(&mut tx, &snapshot.manifest).await?;
+        for link in &snapshot.links {
+            link.verify(
+                &restored.profile.server_id,
+                &restored.profile.account_id,
+                &restored.profile.bundle.public_sign,
+            )?;
+            sqlx::query("INSERT INTO manifest_log(generation,body) VALUES($1,$2) ON CONFLICT(generation) DO NOTHING").bind(link.generation as i64).bind(serde_json::to_string(link)?).execute(&mut *tx).await?;
+        }
+        integrity::verify(&mut tx, &restored.profile).await?;
         tx.commit().await?;
+        // Restoring a backup is the explicit recovery action, unlike ordinary open.
+        integrity::publish_anchor(
+            &restored,
+            "cache",
+            &snapshot.manifest,
+            &snapshot.links,
+            true,
+        )?;
         self.store_profile(&restored.profile)?;
         self.lock();
         self.active = Some(restored);
@@ -329,6 +478,7 @@ impl Client {
         sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
             .execute(&mut *journal_tx)
             .await?;
+        let previous_journal_manifest = integrity::verify_cached(&mut journal_tx, src).await?;
         let stored = sqlx::query("SELECT value FROM meta WHERE name=$1")
             .bind(&journal_name)
             .fetch_optional(&mut *journal_tx)
@@ -383,6 +533,9 @@ impl Client {
                 ),
             )?;
             let mut r = SaveRecord {
+                signature_version: SIGNATURE_VERSION,
+                created_at: signed_time(),
+                manifest: None,
                 operation_id: Uuid::new_v4().to_string(),
                 record_id,
                 version_id,
@@ -403,6 +556,7 @@ impl Client {
             transfer.versions.insert(
                 v.version_id.clone(),
                 StoredVersion {
+                    signature_version: SIGNATURE_VERSION,
                     operation_id: r.operation_id,
                     record_id: r.record_id,
                     version_id: r.version_id,
@@ -411,7 +565,7 @@ impl Client {
                     payload: r.payload,
                     signature: r.signature,
                     archived: v.archived,
-                    created_at: v.created_at,
+                    created_at: r.created_at,
                 },
             );
         }
@@ -419,6 +573,20 @@ impl Client {
         if transfer.fingerprint != fingerprint {
             transfer.fingerprint = fingerprint;
             transfer.operation = Uuid::new_v4().to_string();
+            transfer.manifest = None;
+        }
+        let request = ImportVault {
+            manifest: transfer.manifest.clone(),
+            operation_id: transfer.operation.clone(),
+            versions: original
+                .iter()
+                .map(|v| transfer.versions[&v.version_id].clone())
+                .collect(),
+        };
+        let mut request_json = serde_json::to_value(&request)?;
+        if transfer.manifest.is_none() {
+            integrity::attach_request(target, &mut request_json).await?;
+            transfer.manifest = Some(serde_json::from_value(request_json["manifest"].clone())?);
         }
         let envelope = crypto::seal(
             src._root.as_ref(),
@@ -427,22 +595,17 @@ impl Client {
         )?;
         sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
             .bind(&journal_name).bind(serde_json::to_string(&envelope)?).execute(&mut *journal_tx).await?;
+        integrity::refresh(&mut journal_tx, src, &previous_journal_manifest).await?;
         journal_tx.commit().await?;
-        let request = ImportVault {
-            operation_id: transfer.operation,
-            versions: original
-                .iter()
-                .map(|v| transfer.versions[&v.version_id].clone())
-                .collect(),
-        };
+        integrity::checkpoint(src).await?;
         ensure!(
-            serde_json::to_vec(&request)?.len() <= 32 * 1024 * 1024,
+            serde_json::to_vec(&request_json)?.len() <= 32 * 1024 * 1024,
             "IMPORT_TOO_LARGE"
         );
         let _: Value = response(
             http.post(format!("{}/api/v1/vault/import", target.profile.server))
                 .bearer_auth(target.token.as_str())
-                .json(&request)
+                .json(&request_json)
                 .send()
                 .await?,
         )

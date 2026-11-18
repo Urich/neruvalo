@@ -1,6 +1,5 @@
 //! Local TOTP generation and provisioning. Never include provisioning data in errors.
 use super::*;
-use base64::{engine::general_purpose::STANDARD, Engine};
 use std::io::{Cursor, Read};
 use std::time::{SystemTime, UNIX_EPOCH};
 use totp_rs::{Algorithm, Builder, Secret, Totp};
@@ -138,15 +137,7 @@ impl TotpConfig {
     }
     pub fn qr(&self) -> Result<String> {
         let uri = Zeroizing::new(self.uri()?);
-        let qr = qrcode::QrCode::new(uri.as_bytes()).map_err(|_| anyhow!("INVALID_TOTP_QR"))?;
-        let svg = qr
-            .render::<qrcode::render::svg::Color>()
-            .min_dimensions(256, 256)
-            .build();
-        Ok(format!(
-            "data:image/svg+xml;base64,{}",
-            STANDARD.encode(svg.as_bytes())
-        ))
+        qr::render(uri.as_bytes()).map_err(|_| anyhow!("INVALID_TOTP_QR"))
     }
 }
 
@@ -171,14 +162,10 @@ pub fn read_qr(path: &Path) -> Result<TotpConfig> {
         .decode()
         .map_err(|_| anyhow!("INVALID_TOTP_QR"))?
         .to_luma8();
-    let mut prepared = rqrr::PreparedImage::prepare(image);
     let mut matches = Vec::new();
-    for grid in prepared.detect_grids() {
-        if let Ok((_, content)) = grid.decode() {
-            let content = Zeroizing::new(content);
-            if content.starts_with("otpauth://") {
-                matches.push(TotpConfig::parse(&content)?);
-            }
+    for content in qr::decode(image) {
+        if content.starts_with("otpauth://") {
+            matches.push(TotpConfig::parse(&content)?);
         }
     }
     ensure!(matches.len() == 1, "INVALID_TOTP_QR");

@@ -17,17 +17,21 @@ use std::{
 };
 use uuid::Uuid;
 use zeroize::Zeroizing;
-const LATEST_RECORDS_SQL: &str = "SELECT v.id,v.body FROM versions v JOIN (SELECT record_id,MAX(revision) AS revision FROM versions GROUP BY record_id) latest ON latest.record_id=v.record_id AND latest.revision=v.revision ORDER BY v.record_id";
 mod attachments;
 mod groups;
 pub mod totp;
 pub use attachments::{Attachment, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_ATTACHMENT_BYTES};
+mod integrity;
 mod keepass_import;
 mod local;
 mod local_open;
 pub use keepass_import::{KeepassIssue, KeepassReport};
+#[cfg(test)]
+mod integrity_tests;
 mod proxy;
+mod qr;
 mod sharing;
+pub use qr::scan_share_contact;
 #[cfg(test)]
 mod verification_tests;
 pub use groups::GroupView;
@@ -51,7 +55,8 @@ pub struct Profile {
     pub login: String,
     pub opaque_public: String,
     pub bundle: AccountBundle,
-    pub local_salt: String,
+    pub format_version: u32,
+    pub local_kdf: crypto::PasswordKdf,
     pub local_root: Envelope,
     pub timeout_seconds: u32,
 }
@@ -166,6 +171,11 @@ struct Unlocked {
     needs_sync: bool,
     index_cache: BTreeMap<String, (String, ViewRecord)>,
     attachment_handles: attachments::Handles,
+    reports: std::sync::Mutex<BTreeMap<String, KeepassReport>>,
+    last_report: std::sync::Mutex<Option<String>>,
+    checkpoint_dir: PathBuf,
+    freshness: String,
+    verified_versions: std::sync::Mutex<BTreeMap<String, (String, VerifiedStamp)>>,
 }
 pub struct Client {
     dir: PathBuf,
@@ -208,6 +218,23 @@ pub fn normalize_server(server: &str) -> Result<String> {
     );
     Ok(u.to_string().trim_end_matches('/').to_owned())
 }
+fn read_limited(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    ensure!(file.metadata()?.is_file(), "INVALID_LOCAL_VAULT_FILE");
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= limit, "VAULT_RESOURCE_LIMIT");
+    Ok(bytes)
+}
+fn decode_profile(bytes: &[u8]) -> Result<Profile> {
+    ensure!(bytes.len() <= 64 * 1024, "VAULT_RESOURCE_LIMIT");
+    let value: Value = serde_json::from_slice(bytes)?;
+    ensure!(value["format_version"] == 3, "UNSUPPORTED_LOCAL_SCHEMA");
+    let profile: Profile = serde_json::from_value(value)?;
+    profile.local_kdf.validate()?;
+    Ok(profile)
+}
 fn opaque_ids<'a>(account: &'a str, server: &'a str) -> Identifiers<'a> {
     Identifiers {
         client: Some(account.as_bytes()),
@@ -220,8 +247,8 @@ fn root_context(s: &str, a: &str) -> Vec<u8> {
 fn keys_context(s: &str, a: &str) -> Vec<u8> {
     account_context(s, a, "keys")
 }
-fn local_context(s: &str, a: &str) -> Vec<u8> {
-    account_context(s, a, "local-root")
+fn local_context(s: &str, a: &str, kdf: &crypto::PasswordKdf) -> Vec<u8> {
+    serde_json::to_vec(&("neruvalo-password-envelope-v2", s, a, kdf)).expect("KDF context")
 }
 fn version_context(s: &str, a: &str, r: &str, v: &str) -> Vec<u8> {
     serde_json::to_vec(&("neruvalo-record-data-v1", s, a, r, v)).expect("tuple")
@@ -232,10 +259,24 @@ fn recovery_context(s: &str, a: &str, id: &str) -> Vec<u8> {
 fn recovery_transcript(s: &str, a: &str, r: &str, t: &str, c: &str, m: &str) -> Vec<u8> {
     serde_json::to_vec(&("neruvalo-recovery-v1", s, a, r, t, c, m)).expect("tuple")
 }
-async fn response<T: serde::de::DeserializeOwned>(r: reqwest::Response) -> Result<T> {
+async fn response<T: serde::de::DeserializeOwned>(mut r: reqwest::Response) -> Result<T> {
     let status = r.status();
-    let bytes = r.bytes().await?;
-    ensure!(bytes.len() <= 32 * 1024 * 1024, "Server response too large");
+    ensure!(
+        r.content_length()
+            .is_none_or(|bytes| bytes <= 32 * 1024 * 1024),
+        "Server response too large"
+    );
+    let mut bytes = Vec::new();
+    while let Some(chunk) = r.chunk().await? {
+        ensure!(
+            bytes
+                .len()
+                .checked_add(chunk.len())
+                .is_some_and(|length| length <= 32 * 1024 * 1024),
+            "Server response too large"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
     if !status.is_success() {
         let e: Value = serde_json::from_slice(&bytes).unwrap_or_default();
         bail!(
@@ -346,6 +387,11 @@ pub fn is_unsupported_vault_error(error: &anyhow::Error) -> bool {
         "UNSUPPORTED_TYPE",
         "UNSUPPORTED_ATTACHMENT_FORMAT",
         "unsupported envelope",
+        "UNSUPPORTED_SIGNATURE_FORMAT",
+        "VAULT_INTEGRITY",
+        "VAULT_ROLLBACK",
+        "VAULT_RESOURCE_LIMIT",
+        "UNSUPPORTED_KDF",
     ]
     .iter()
     .any(|code| message.contains(code))
@@ -353,36 +399,39 @@ pub fn is_unsupported_vault_error(error: &anyhow::Error) -> bool {
 
 // Check history headers too, but decrypt only current record metadata. The index
 // cache is reused by the first list request; file envelopes are never opened.
-fn validate_versions(a: &mut Unlocked, versions: &[StoredVersion]) -> Result<()> {
-    let mut latest = BTreeMap::<&str, &StoredVersion>::new();
-    for version in versions {
+fn validate_versions(a: &mut Unlocked, versions: &[StoredVersion]) -> Result<VerifiedHistory> {
+    let history = VerifiedHistory::from_versions(
+        &a.profile.server_id,
+        &a.profile.account_id,
+        &a.profile.bundle.public_sign,
+        versions,
+    )?;
+    for head in history.records.values() {
+        let version = versions
+            .iter()
+            .find(|v| v.version_id == head.version_id)
+            .ok_or_else(|| anyhow!("VAULT_INTEGRITY"))?;
         attachments::validate_payload_format(&version.payload, false)?;
-        if latest
-            .get(version.record_id.as_str())
-            .is_none_or(|old| old.revision < version.revision)
-        {
-            latest.insert(&version.record_id, version);
-        }
-    }
-    for version in latest.values() {
         index_view(a, &version.version_id, &serde_json::to_string(version)?)?;
     }
-    Ok(())
+    Ok(history)
 }
 async fn validate_cached_vault(a: &mut Unlocked) -> Result<()> {
-    let rows = sqlx::query("SELECT body FROM versions")
-        .fetch_all(&a.cache)
-        .await?;
-    let versions = rows
-        .iter()
-        .map(|row| serde_json::from_str::<StoredVersion>(&row.get::<String, _>("body")))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    validate_versions(a, &versions)?;
+    let confirmed = integrity::checkpoint(a).await?;
+    a.freshness = if confirmed {
+        "confirmed"
+    } else {
+        "unconfirmed"
+    }
+    .into();
+    integrity::index(a, None).await?;
     sharing::validate_cached_formats(a).await?;
     Ok(())
 }
 
-async fn cache(dir: &Path, id: &str) -> Result<AnyPool> {
+const CACHE_SCHEMA: &str = "CREATE TABLE meta(name TEXT NOT NULL PRIMARY KEY,value TEXT NOT NULL) STRICT; CREATE TABLE versions(id TEXT NOT NULL PRIMARY KEY,record_id TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>0),body TEXT NOT NULL CHECK(json_valid(body)),UNIQUE(record_id,revision)) STRICT; CREATE TABLE manifest_log(generation INTEGER NOT NULL PRIMARY KEY CHECK(generation>0),body TEXT NOT NULL CHECK(json_valid(body))) STRICT; INSERT INTO meta(name,value) VALUES('schema_version','3');";
+
+async fn cache(dir: &Path, id: &str, initial: Option<(&Profile, &AccountKeys)>) -> Result<AnyPool> {
     sqlx::any::install_default_drivers();
     let folder = dir.join(id);
     std::fs::create_dir_all(&folder)?;
@@ -396,27 +445,69 @@ async fn cache(dir: &Path, id: &str) -> Result<AnyPool> {
         .max_connections(1)
         .connect(&sqlite_database_url(&db)?)
         .await?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,value TEXT NOT NULL)")
-        .execute(&pool)
-        .await?;
-    if let Some(row) = sqlx::query("SELECT value FROM meta WHERE name='schema_version'")
-        .fetch_optional(&pool)
-        .await?
-    {
+    let exists = sqlx::query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_optional(&pool)
+    .await?
+    .is_some();
+    if exists {
+        let row = sqlx::query("SELECT value FROM meta WHERE name='schema_version'")
+            .fetch_optional(&pool)
+            .await
+            .map_err(|_| anyhow!("UNSUPPORTED_LOCAL_SCHEMA"))?;
         ensure!(
-            row.get::<String, _>("value") == "2",
+            row.is_some_and(|r| r.get::<String, _>("value") == DATABASE_SCHEMA),
             "UNSUPPORTED_LOCAL_SCHEMA"
         );
-    } else {
-        sqlx::query("INSERT INTO meta(name,value) VALUES('schema_version','2')")
-            .execute(&pool)
+    } else if let Some((profile, keys)) = initial {
+        let mut tx = pool.begin().await?;
+        for statement in CACHE_SCHEMA.split(';').filter(|s| !s.trim().is_empty()) {
+            sqlx::query(statement).execute(&mut *tx).await?;
+        }
+        sqlx::query("INSERT INTO meta(name,value) VALUES('local_profile',$1)")
+            .bind(serde_json::to_string(profile)?)
+            .execute(&mut *tx)
             .await?;
+        integrity::initialize(&mut tx, profile, keys).await?;
+        tx.commit().await?;
     }
-    sqlx::raw_sql("CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY,record_id TEXT NOT NULL,revision BIGINT NOT NULL,body TEXT NOT NULL); CREATE INDEX IF NOT EXISTS versions_latest ON versions(record_id,revision DESC);").execute(&pool).await?;
     Ok(pool)
 }
-async fn set_meta(pool: &AnyPool, name: &str, value: &str) -> Result<()> {
-    sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(name).bind(value).execute(pool).await?;
+async fn set_meta(a: &Unlocked, name: &str, value: &str) -> Result<()> {
+    let mut tx = a.cache.begin().await?;
+    sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
+        .execute(&mut *tx)
+        .await?;
+    let previous = integrity::verify_cached(&mut tx, a).await?;
+    if sqlx::query("SELECT value FROM meta WHERE name=$1")
+        .bind(name)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some_and(|r| r.get::<String, _>("value") == value)
+    {
+        tx.commit().await?;
+        return Ok(());
+    }
+    sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(name).bind(value).execute(&mut *tx).await?;
+    integrity::refresh(&mut tx, a, &previous).await?;
+    tx.commit().await?;
+    integrity::checkpoint(a).await?;
+    Ok(())
+}
+async fn delete_meta(a: &Unlocked, name: &str) -> Result<()> {
+    let mut tx = a.cache.begin().await?;
+    sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
+        .execute(&mut *tx)
+        .await?;
+    let previous = integrity::verify_cached(&mut tx, a).await?;
+    sqlx::query("DELETE FROM meta WHERE name=$1")
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+    integrity::refresh(&mut tx, a, &previous).await?;
+    tx.commit().await?;
+    integrity::checkpoint(a).await?;
     Ok(())
 }
 impl Client {
@@ -499,7 +590,7 @@ impl Client {
     pub fn status(&mut self) -> Value {
         match self.unlocked() {
             Ok(a) => {
-                json!({"unlocked":true,"profile":a.profile.id,"login":a.profile.login,"server":a.profile.server,"online":a.online,"local":a.profile.kind == ProfileKind::Local,"timeout_seconds":a.profile.timeout_seconds})
+                json!({"unlocked":true,"freshness":a.freshness,"profile":a.profile.id,"login":a.profile.login,"server":a.profile.server,"online":a.online,"local":a.profile.kind == ProfileKind::Local,"timeout_seconds":a.profile.timeout_seconds})
             }
             Err(_) => json!({"unlocked":false}),
         }
@@ -510,7 +601,7 @@ impl Client {
             let entry = entry?;
             let p = entry.path().join("profile.json");
             if p.is_file() {
-                let profile: Profile = serde_json::from_slice(&std::fs::read(p)?)?;
+                let profile: Profile = decode_profile(&read_limited(&p, 64 * 1024)?)?;
                 profiles
                     .push(json!({"id":profile.id,"login":profile.login,"server":profile.server,"local":profile.kind == ProfileKind::Local}));
             }
@@ -536,10 +627,6 @@ impl Client {
             file.sync_all()?;
         }
         // Windows rename does not replace an existing target. Both files contain only encrypted key envelopes.
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(&path)?;
-        }
         std::fs::rename(temporary, path)?;
         Ok(())
     }
@@ -666,6 +753,14 @@ impl Client {
         };
         self.pending = Some(Pending {
             finish: RegisterFinish {
+                manifest: VaultManifest::create(
+                    &info.server_id,
+                    &challenge.account_id,
+                    &keys,
+                    BTreeMap::new(),
+                    None,
+                    String::new(),
+                )?,
                 ticket: challenge.ticket.clone(),
                 email_code: String::new(),
                 message: b64(finish.message.serialize()),
@@ -780,7 +875,7 @@ impl Client {
         let path = self.dir.join(&id).join("profile.json");
         let public = b64(finish.server_s_pk.serialize());
         if path.exists() {
-            let old: Profile = serde_json::from_slice(&std::fs::read(path)?)?;
+            let old: Profile = decode_profile(&read_limited(&path, 64 * 1024)?)?;
             ensure!(
                 old.server_id == info.server_id && old.opaque_public == public,
                 "SERVER_KEY_CHANGED"
@@ -821,12 +916,12 @@ impl Client {
                 && keys.public_share() == result.bundle.public_share,
             "PUBLIC_KEY_MISMATCH"
         );
-        let salt = crypto::random::<16>();
-        let local = crypto::password_key(&password, &salt)?;
+        let local_kdf = crypto::PasswordKdf::new();
+        let local = local_kdf.derive(&password)?;
         let local_root = crypto::seal(
             local.as_ref(),
             root.as_ref(),
-            &local_context(&info.server_id, &result.account_id),
+            &local_context(&info.server_id, &result.account_id, &local_kdf),
         )?;
         let profile = Profile {
             kind: ProfileKind::Server,
@@ -837,11 +932,12 @@ impl Client {
             login: login.into(),
             opaque_public: public,
             bundle: result.bundle,
-            local_salt: b64(salt),
+            format_version: 3,
+            local_kdf,
             local_root,
             timeout_seconds: result.timeout_seconds,
         };
-        let db = cache(&self.dir, &id).await?;
+        let db = cache(&self.dir, &id, Some((&profile, &keys))).await?;
         self.store_profile(&profile)?;
         self.active = Some(Unlocked {
             profile,
@@ -854,7 +950,17 @@ impl Client {
             needs_sync: false,
             index_cache: BTreeMap::new(),
             attachment_handles: attachments::Handles::default(),
+            reports: Default::default(),
+            last_report: Default::default(),
+            checkpoint_dir: self.dir.join("integrity"),
+            freshness: "unconfirmed".into(),
+            verified_versions: Default::default(),
         });
+        validate_cached_vault(self.unlocked()?).await?;
+        {
+            let a = self.unlocked()?;
+            set_meta(a, "local_profile", &serde_json::to_string(&a.profile)?).await?;
+        }
         if let Err(error) = self.sync().await {
             self.lock();
             return Err(error);
@@ -868,10 +974,14 @@ impl Client {
                 .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
             "Invalid profile"
         );
-        let p: Profile =
-            serde_json::from_slice(&std::fs::read(self.dir.join(id).join("profile.json"))?)?;
+        let p: Profile = decode_profile(&read_limited(
+            &self.dir.join(id).join("profile.json"),
+            64 * 1024,
+        )?)?;
         let (profile, database) = local_open::profile_for_unlock(&self.dir, id, p).await?;
-        let unlocked = local_open::unlock_candidate(profile, &database, password).await?;
+        let unlocked =
+            local_open::unlock_candidate(profile, &database, password, self.dir.join("integrity"))
+                .await?;
         self.active = Some(unlocked);
         Ok(self.status())
     }
@@ -886,11 +996,9 @@ impl Client {
         let http = self.http.clone();
         let a = self.unlocked()?;
         ensure!(!a.token.is_empty(), "ONLINE_LOGIN_REQUIRED");
-        if let Some(row) = sqlx::query("SELECT value FROM meta WHERE name='pending_operation'")
-            .fetch_optional(&a.cache)
-            .await?
-        {
-            let pending: Value = serde_json::from_str(&row.get::<String, _>("value"))?;
+        integrity::checkpoint(a).await?;
+        if let Some(row) = integrity::get_meta(a, "pending_operation").await? {
+            let pending: Value = serde_json::from_str(&row)?;
             let check = http
                 .get(format!(
                     "{}/api/v1/operations/{}",
@@ -924,9 +1032,7 @@ impl Client {
                 }
                 if !replay.status().is_success() {
                     if replay.status().is_client_error() {
-                        sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
-                            .execute(&a.cache)
-                            .await?;
+                        delete_meta(a, "pending_operation").await?;
                     } else {
                         let _: Value = response(replay).await?;
                     }
@@ -934,9 +1040,7 @@ impl Client {
             } else {
                 let _: Value = response(check).await?;
             }
-            sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
-                .execute(&a.cache)
-                .await?;
+            delete_meta(a, "pending_operation").await?;
         }
         let result = http
             .get(format!("{}/api/v1/snapshot", a.profile.server))
@@ -957,12 +1061,30 @@ impl Client {
             }
         };
         let versions: Vec<StoredVersion> = serde_json::from_value(snapshot["versions"].clone())?;
-        for v in &versions {
-            verify_version(&a.profile, v)?;
-        }
-        validate_versions(a, &versions)?;
+        let owner: VaultManifest = serde_json::from_value(snapshot["manifest"].clone())
+            .map_err(|_| anyhow!("VAULT_INTEGRITY: missing owner manifest"))?;
+        let owner_links: Vec<ManifestLink> =
+            serde_json::from_value(snapshot["manifest_links"].clone())?;
+        owner.verify(
+            &a.profile.server_id,
+            &a.profile.account_id,
+            &a.profile.bundle.public_sign,
+            &a.profile.bundle.public_share,
+        )?;
+        let history = validate_versions(a, &versions)?;
+        ensure!(
+            owner.records == history.records && owner.auxiliary_digest.is_empty(),
+            "VAULT_INTEGRITY: incomplete server snapshot"
+        );
+        let freshness_confirmed = integrity::check_anchor(a, "owner", &owner, &owner_links)?;
+
         let share_guard = sharing::verify_snapshot(a, &snapshot["sharing"]).await?;
         let mut tx = a.cache.begin().await?;
+        sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
+            .execute(&mut *tx)
+            .await?;
+        let cache_manifest = integrity::verify_cached(&mut tx, a).await?;
+        sqlx::query("INSERT INTO meta(name,value) VALUES('owner_manifest',$1) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(&owner)?).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO meta(name,value) VALUES('share_guard',$1) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(&share_guard)?).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO meta(name,value) VALUES('sharing',$1) ON CONFLICT(name) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(&snapshot["sharing"])?).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM versions")
@@ -977,7 +1099,16 @@ impl Client {
                 .execute(&mut *tx)
                 .await?;
         }
+        integrity::refresh(&mut tx, a, &cache_manifest).await?;
         tx.commit().await?;
+        integrity::checkpoint(a).await?;
+        integrity::publish_anchor(a, "owner", &owner, &owner_links, false)?;
+        a.freshness = if freshness_confirmed {
+            "confirmed"
+        } else {
+            "unconfirmed"
+        }
+        .into();
         a.profile.timeout_seconds = snapshot["timeout_seconds"].as_u64().unwrap_or(60) as u32;
         a.online = true;
         a.needs_sync = false;
@@ -1012,86 +1143,44 @@ impl Client {
     // with an unchanged version ID must pass signature verification again.
     async fn index_objects(&mut self) -> Result<Vec<ViewRecord>> {
         let a = self.unlocked()?;
-        let rows = sqlx::query(LATEST_RECORDS_SQL).fetch_all(&a.cache).await?;
-        let mut records = Vec::with_capacity(rows.len());
-        let mut retained = std::collections::BTreeSet::new();
-        for row in rows {
-            let body: String = row.get("body");
-            let id: String = row.get("id");
-            retained.insert(id.clone());
-            records.push(index_view(a, &id, &body)?);
-        }
-        a.index_cache.retain(|id, _| retained.contains(id));
-        Ok(records)
+        integrity::index(a, None).await
     }
     /// Visible rows need only metadata and their icon, never attachments or secrets.
     pub async fn list_rows(&mut self, ids: &[String]) -> Result<Vec<ViewRecord>> {
         ensure!(ids.len() <= 50, "PAGE_TOO_LARGE");
         let a = self.unlocked()?;
-        let mut records = Vec::new();
-        for id in ids {
-            if let Some(row) = sqlx::query(
-                "SELECT id,body FROM versions WHERE record_id=$1 ORDER BY revision DESC LIMIT 1",
-            )
-            .bind(id)
-            .fetch_optional(&a.cache)
+        Ok(integrity::index(a, Some(ids))
             .await?
-            {
-                let version_id: String = row.get("id");
-                let body: String = row.get("body");
-                let record = index_view(a, &version_id, &body)?;
-                if record.data.record_type != "group" {
-                    records.push(record);
-                }
-            }
-        }
-        Ok(records)
+            .into_iter()
+            .filter(|record| record.data.record_type != "group")
+            .collect())
     }
     /// Fetch only the latest payloads needed by the visible portion of the list.
     pub async fn list_records(&mut self, ids: &[String]) -> Result<Vec<ViewRecord>> {
         ensure!(ids.len() <= 50, "PAGE_TOO_LARGE");
         let a = self.unlocked()?;
         let mut records = Vec::new();
-        for id in ids {
-            let row = sqlx::query(
-                "SELECT body FROM versions WHERE record_id=$1 ORDER BY revision DESC LIMIT 1",
-            )
-            .bind(id)
-            .fetch_optional(&a.cache)
-            .await?;
-            if let Some(row) = row {
-                let version: StoredVersion = serde_json::from_str(&row.get::<String, _>("body"))?;
-                let record = view(a, &version)?;
-                if record.data.record_type != "group" {
-                    records.push(record);
-                }
+        for version in integrity::read(a, Some(ids), false).await? {
+            let record = view(a, &version)?;
+            if record.data.record_type != "group" {
+                records.push(record);
             }
         }
         Ok(records)
     }
     async fn objects(&mut self) -> Result<Vec<ViewRecord>> {
         let a = self.unlocked()?;
-        let rows = sqlx::query(LATEST_RECORDS_SQL).fetch_all(&a.cache).await?;
-        rows.into_iter()
-            .map(|r| {
-                let v: StoredVersion = serde_json::from_str(&r.get::<String, _>("body"))?;
-                view(a, &v)
-            })
+        integrity::read(a, None, false)
+            .await?
+            .iter()
+            .map(|v| view(a, v))
             .collect()
     }
     pub async fn history(&mut self, id: &str) -> Result<Vec<ViewRecord>> {
         let a = self.unlocked()?;
-        let rows =
-            sqlx::query("SELECT body FROM versions WHERE record_id=$1 ORDER BY revision DESC")
-                .bind(id)
-                .fetch_all(&a.cache)
-                .await?;
-        rows.into_iter()
-            .map(|r| {
-                let v: StoredVersion = serde_json::from_str(&r.get::<String, _>("body"))?;
-                view(a, &v)
-            })
-            .collect()
+        let mut versions = integrity::read(a, Some(&[id.to_owned()]), true).await?;
+        versions.reverse();
+        versions.iter().map(|v| view(a, v)).collect()
     }
     pub async fn save(
         &mut self,
@@ -1136,21 +1225,15 @@ impl Client {
         );
         ensure!(!a.needs_sync, "SYNCHRONIZATION_REQUIRED");
         ensure!(
-            sqlx::query("SELECT value FROM meta WHERE name='pending_operation'")
-                .fetch_optional(&a.cache)
-                .await?
-                .is_none(),
+            integrity::get_meta(a, "pending_operation").await?.is_none(),
             "SAVE_RESULT_UNKNOWN"
         );
         let previous = if let Some(ref id) = id {
-            let row = sqlx::query(
-                "SELECT body FROM versions WHERE record_id=$1 ORDER BY revision DESC LIMIT 1",
-            )
-            .bind(id)
-            .fetch_optional(&a.cache)
-            .await?
-            .ok_or_else(|| anyhow!("RECORD_NOT_FOUND"))?;
-            let v: StoredVersion = serde_json::from_str(&row.get::<String, _>("body"))?;
+            let v = integrity::read(a, Some(std::slice::from_ref(id)), false)
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("RECORD_NOT_FOUND"))?;
             ensure!(v.revision == expected_revision, "RECORD_VERSION_MISMATCH");
             ensure!(
                 (view(a, &v)?.data.record_type == "group") == (data.record_type == "group"),
@@ -1182,6 +1265,9 @@ impl Client {
             &version_context(&a.profile.server_id, &a.profile.account_id, &id, &version),
         )?;
         let mut r = SaveRecord {
+            signature_version: SIGNATURE_VERSION,
+            created_at: signed_time(),
+            manifest: None,
             operation_id: Uuid::new_v4().to_string(),
             record_id: id,
             expected_revision,
@@ -1201,8 +1287,9 @@ impl Client {
             return local::commit(a, &[r], structure_snapshot.as_ref()).await;
         }
         let grouped = structure_snapshot.is_some();
-        let request = if let Some(snapshot) = structure_snapshot {
+        let mut request = if let Some(snapshot) = structure_snapshot {
             serde_json::to_value(neruvalo_protocol::SaveBatch {
+                manifest: None,
                 operation_id: r.operation_id.clone(),
                 snapshot,
                 records: vec![r],
@@ -1210,12 +1297,8 @@ impl Client {
         } else {
             serde_json::to_value(r)?
         };
-        set_meta(
-            &a.cache,
-            "pending_operation",
-            &serde_json::to_string(&request)?,
-        )
-        .await?;
+        integrity::attach_request(a, &mut request).await?;
+        set_meta(a, "pending_operation", &serde_json::to_string(&request)?).await?;
         let result = http
             .post(format!(
                 "{}/api/v1/records/{}",
@@ -1234,9 +1317,7 @@ impl Client {
             Ok(resp) => match response(resp).await {
                 Ok(v) => v,
                 Err(e) => {
-                    sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
-                        .execute(&a.cache)
-                        .await?;
+                    delete_meta(a, "pending_operation").await?;
                     if ["RECORD_VERSION_MISMATCH", "SHARING_VERSION_MISMATCH"]
                         .contains(&e.to_string().as_str())
                     {
@@ -1250,9 +1331,7 @@ impl Client {
                 bail!("SAVE_RESULT_UNKNOWN: reconnect and synchronize before another edit")
             }
         };
-        sqlx::query("DELETE FROM meta WHERE name='pending_operation'")
-            .execute(&a.cache)
-            .await?;
+        delete_meta(a, "pending_operation").await?;
         self.sync().await?;
         Ok(if grouped {
             result["records"][0].clone()
@@ -1393,22 +1472,7 @@ impl Client {
     }
 }
 fn verify_version(p: &Profile, v: &StoredVersion) -> Result<()> {
-    ensure!(v.revision > 0, "INVALID_REVISION");
-    let r = SaveRecord {
-        operation_id: v.operation_id.clone(),
-        record_id: v.record_id.clone(),
-        expected_revision: v.revision - 1,
-        version_id: v.version_id.clone(),
-        previous_version: v.previous_version.clone(),
-        payload: v.payload.clone(),
-        signature: v.signature.clone(),
-        archived: v.archived,
-    };
-    crypto::verify(
-        &p.bundle.public_sign,
-        &record_transcript(&p.server_id, &p.account_id, &r),
-        &v.signature,
-    )
+    validate_stored_version(&p.server_id, &p.account_id, &p.bundle.public_sign, v)
 }
 fn index_view(a: &mut Unlocked, id: &str, body: &str) -> Result<ViewRecord> {
     let fingerprint = crypto::digest(body);
@@ -1514,7 +1578,7 @@ mod lazy_record_tests {
                 && !serialized.contains("private image")
                 && !serialized.contains("private source")
         );
-        let rows = client.list_rows(&[id.clone()]).await.unwrap();
+        let rows = client.list_rows(std::slice::from_ref(&id)).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_ne!(rows[0].data.fields["password"], "current password");
         assert!(rows[0].data.notes.is_empty());
@@ -1529,13 +1593,15 @@ mod lazy_record_tests {
             .is_err());
         assert!(client.list_records(&[]).await.unwrap().is_empty());
         let a = client.unlocked().unwrap();
-        assert!(sqlx::query(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='versions_latest'"
-        )
-        .fetch_optional(&a.cache)
-        .await
-        .unwrap()
-        .is_some());
+        let plan = sqlx::query("EXPLAIN QUERY PLAN SELECT body FROM versions WHERE record_id=$1 ORDER BY revision DESC LIMIT 1")
+            .bind(&summaries[0].record_id).fetch_all(&a.cache).await.unwrap();
+        let detail = plan
+            .iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(detail.contains("SEARCH versions USING INDEX"), "{detail}");
+        assert!(!detail.contains("USE TEMP B-TREE"), "{detail}");
         assert_eq!(a.index_cache.len(), 2);
         let row = sqlx::query(
             "SELECT id,body FROM versions WHERE record_id=$1 ORDER BY revision DESC LIMIT 1",

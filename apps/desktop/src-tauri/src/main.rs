@@ -44,6 +44,20 @@ fn secret(r: &mut Value, key: &str) -> Result<Zeroizing<String>> {
     }
 }
 #[tauri::command]
+async fn scan_share_contact(
+    window: tauri::WebviewWindow,
+    frame: String,
+) -> Result<Option<String>, String> {
+    if window.label() != "main" {
+        return Err("Commands are only available in the main window".into());
+    }
+    tokio::task::spawn_blocking(move || neruvalo_client::scan_share_contact(&frame))
+        .await
+        .map_err(|_| "CONTACT_CAMERA_ERROR".to_owned())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn command(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -105,8 +119,11 @@ async fn command(
                 | "totp_qr"
                 | "totp_qr_import"
                 | "sharing"
+                | "account_contact"
                 | "resolve_recipient"
+                | "resolve_share_contact"
                 | "share_change"
+                | "share_to_contact"
                 | "settings"
                 | "export_local_backup"
                 | "import_local"
@@ -118,6 +135,7 @@ async fn command(
                 | "keepass_commit"
                 | "keepass_cancel"
                 | "keepass_last_report"
+                | "keepass_forget_report"
                 | "keepass_open_report"
         ) {
             let status = c.status();
@@ -191,21 +209,10 @@ async fn command(
             "keepass_open_report" => {
                 let labels = serde_json::from_value(r["labels"].take())?;
                 let html = c.keepass_report_html(&text(r, "ticket")?, &labels).await?;
-                let directory = app.path().app_cache_dir()?.join("import-reports");
-                std::fs::create_dir_all(&directory)?;
-                let path = directory.join(format!("keepass-{}.html", uuid_for_report()));
-                let mut options = std::fs::OpenOptions::new();
-                options.write(true).create_new(true);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::OpenOptionsExt;
-                    options.mode(0o600);
-                }
-                use std::io::Write;
-                options.open(&path)?.write_all(html.as_bytes())?;
-                let url = tauri::Url::from_file_path(&path)
-                    .map_err(|_| anyhow!("Invalid report path"))?;
-                open_browser_url(url.as_str())?;
+                Ok(json!(html))
+            }
+            "keepass_forget_report" => {
+                c.forget_keepass_report(&text(r, "ticket")?)?;
                 Ok(json!(true))
             }
             "keepass_cancel" => {
@@ -477,7 +484,10 @@ async fn command(
                 .await
             }
             "sharing" => c.sharing().await,
+            "account_contact" => c.account_contact(),
             "resolve_recipient" => c.resolve_recipient(&text(r, "login")?).await,
+            "resolve_share_contact" => c.resolve_share_contact(&text(r, "code")?).await,
+            "share_to_contact" => c.share_to_contact(&text(r, "id")?, &text(r, "code")?).await,
             "share_change" => {
                 c.share_change(&text(r, "kind")?, &text(r, "id")?, &text(r, "target")?)
                     .await
@@ -705,6 +715,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             command,
+            scan_share_contact,
             verification::cancel_verification
         ])
         .run(tauri::generate_context!())
@@ -727,11 +738,6 @@ fn open_project_link(target: &str, commit: Option<&str>) -> anyhow::Result<()> {
         _ => anyhow::bail!("Invalid project link"),
     };
     open_browser_url(&url)
-}
-
-fn uuid_for_report() -> String {
-    // A random token avoids collisions without using source file names in paths.
-    uuid::Uuid::new_v4().to_string()
 }
 
 fn open_browser_url(url: &str) -> anyhow::Result<()> {

@@ -144,7 +144,7 @@ export function filterEntries(
   );
 }
 export function isUnsupportedVaultFormat(error: unknown): boolean {
-  return /UNSUPPORTED_(?:VAULT_FORMAT|LOCAL_SCHEMA|PROTOCOL|FORMAT|TYPE|ATTACHMENT_FORMAT)\b|unsupported envelope/.test(String(error));
+  return /UNSUPPORTED_(?:VAULT_FORMAT|LOCAL_SCHEMA|PROTOCOL|FORMAT|TYPE|ATTACHMENT_FORMAT|SIGNATURE_FORMAT|KDF)\b|unsupported envelope/.test(String(error));
 }
 export function errorText(error: unknown): string {
   const s = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, "");
@@ -178,6 +178,12 @@ export function errorText(error: unknown): string {
     [/Invalid server URL|HTTPS is required|Use the server origin|relative URL without a base|empty host|invalid port/i, "invalidServerAddress"],
     [/ONLINE_LOGIN_REQUIRED|LOCAL_PROFILE_REQUIRED/, "onlineLoginRequired"],
     [/SAVE_RESULT_UNKNOWN/, "saveResultUnknown"],
+    [/VAULT_INTEGRITY|INVALID_KDF_PARAMETERS/, "vaultIntegrityError"],
+    [/VAULT_ROLLBACK/, "vaultRollbackDetected"],
+    [/INVALID_SHARE_CONTACT/, "invalidShareContact"],
+    [/SHARE_CONTACT_OTHER_SERVER/, "shareContactOtherServer"],
+    [/CONTACT_CAMERA_ERROR/, "contactCameraError"],
+    [/KEEPASS_REPORT_UNAVAILABLE/, "importReportNotAvailable"],
     [/VERIFICATION_EXPIRED/, "verificationExpired"],
     [/INVALID_LOGIN/, "loginRequirements"],
     [/INVALID_EMAIL\b/, "invalidEmail"],
@@ -186,7 +192,7 @@ export function errorText(error: unknown): string {
     [/ACCESS_DENIED|FORBIDDEN/, "accessDenied"],
     [/ATTACHMENT_TOO_LARGE|ATTACHMENTS_TOO_LARGE|TOO_MANY_ATTACHMENTS/, "attachmentLimits"],
     [/INVALID_ATTACHMENT/, "invalidAttachment"],
-    [/Record exceeds|Server response too large/, "dataTooLarge"],
+    [/Record exceeds|Server response too large|VAULT_RESOURCE_LIMIT/, "dataTooLarge"],
   ];
   for (const [pattern, key] of messages) if (pattern.test(s)) return `ui.${key}`;
   if (s.includes("INVALID_PROXY_CONFIG"))

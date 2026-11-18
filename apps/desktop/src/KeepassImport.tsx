@@ -9,7 +9,7 @@ type SelectedFile = { id: string; name: string };
 export type KeepassReport = {
   ticket: string; folder: string; entries: number; groups: number; attachments: number;
   archived: number; history_versions: number; can_confirm: boolean; dispatched: boolean;
-  completed?: boolean;
+  completed?: boolean; report_available?: boolean; omitted_issues?: number;
   issues: { code: string; item: string; blocking: boolean; group_path?: string[]; source_id?: string; field?: string }[];
 };
 export function KeepassImport({ profile, disabled, onChanged }: {
@@ -21,6 +21,7 @@ export function KeepassImport({ profile, disabled, onChanged }: {
   const [file, setFile] = useState<SelectedFile | null>(null);
   const [keyfile, setKeyfile] = useState<SelectedFile | null>(null);
   const [report, setReport] = useState<KeepassReport | null>(null);
+  const [reportHtml, setReportHtml] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -45,6 +46,8 @@ export function KeepassImport({ profile, disabled, onChanged }: {
   }
   async function reset() {
     if (report && !report.completed) await call("keepass_cancel", { ticket: report.ticket });
+    if (report?.completed) await call("keepass_forget_report", { ticket: report.ticket });
+    setReportHtml(null);
     setReport(null); setPassword(""); setFile(null); setKeyfile(null);
   }
   async function pick(kind: "database" | "keyfile") {
@@ -81,20 +84,21 @@ export function KeepassImport({ profile, disabled, onChanged }: {
     </form> : <div className="import-summary">
       <h3>{t(report.completed ? "ui.reportCompleted" : !report.can_confirm ? "ui.reportBlocked" : "ui.reportPreview")}</h3>
       <p><bdi>{report.folder}</bdi></p>
-      <dl>
+      {report.report_available === false ? <p className="muted">{t("ui.importReportNotAvailable")}</p> : <dl>
         {([
           ["keepassEntries", report.entries], ["keepassGroups", report.groups], ["attachments", report.attachments],
           ["keepassArchived", report.archived], ["keepassHistory", report.history_versions],
           ["reportRows", report.issues.length], ["reportErrors", report.issues.filter(i => i.blocking).length],
         ] as const).map(([key, value]) => <div key={key}><dt>{t(`ui.${key}`)}</dt><dd>{value}</dd></div>)}
-      </dl>
+      </dl>}
+      {!!report.omitted_issues && <p>{t("ui.importReportOmitted")}: {report.omitted_issues}</p>}
       {!report.completed && <p className="muted">{t("ui.importReviewShort")}</p>}
       {report.dispatched && !report.completed && <p role="status">{t("ui.importUncertainShort")}</p>}
       <div className="import-actions">
-        <button type="button" className="secondary" disabled={unavailable} onClick={() => void run(async () => {
+        <button type="button" className="secondary" disabled={unavailable || report.report_available === false} onClick={() => void run(async () => {
           const keys = [...new Set([...reportLabelKeys, ...report.issues.map(issue => `keepassIssue.${issue.code}`)])];
           const labels = { ...Object.fromEntries(keys.map(key => [key, t(`ui.${key}`)])), language };
-          await call("keepass_open_report", { ticket: report.ticket, labels });
+          setReportHtml(await call<string>("keepass_open_report", { ticket: report.ticket, labels }));
         })}>{t("ui.openImportReport")}</button>
         {(!report.dispatched || report.completed) && <button type="button" className="secondary" disabled={unavailable}
           onClick={() => void run(reset)}>{t(report.completed ? "ui.newImport" : "ui.cancel")}</button>}
@@ -110,6 +114,10 @@ export function KeepassImport({ profile, disabled, onChanged }: {
           await onChanged();
         })}>{t(busy ? "ui.pleaseWait" : report.dispatched ? "ui.keepassRetry" : "ui.keepassConfirm")}</button>}
       </div>
+    </div>}
+    {reportHtml && <div className="import-report-panel">
+      <button type="button" className="secondary" onClick={() => setReportHtml(null)}>{t("ui.close")}</button>
+      <iframe title={t("ui.reportTitle")} srcDoc={reportHtml} sandbox="" referrerPolicy="no-referrer" />
     </div>}
     {error && <p role="alert" className="error">{t(error)}</p>}
   </section>;

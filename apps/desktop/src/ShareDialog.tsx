@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ContactScanner } from "./ContactScanner";
 import { useI18n } from "./i18n";
 import { errorText } from "./model";
 export type Recipient = {
@@ -8,11 +9,15 @@ export type Recipient = {
   public_share: string;
   fingerprint?: string;
 };
+export type VerifiedContact = { code: string; recipient: Recipient };
+
 export function ShareDialog({
   title,
   wallet,
   recipients,
   onResolve,
+  resolveContact,
+  initialContact,
   onCreate,
   onRevoke,
   onClose,
@@ -22,15 +27,18 @@ export function ShareDialog({
   wallet: boolean;
   recipients: { share_id: string; recipient_login: string }[];
   onResolve: (login: string) => Promise<Recipient>;
-  onCreate: (login: string) => Promise<void>;
+  resolveContact: (code: string) => Promise<Recipient>;
+  initialContact?: VerifiedContact;
+  onCreate: (login: string, code?: string) => Promise<void>;
   onRevoke: (id: string) => Promise<void>;
   onClose: () => void;
   disabled: boolean;
 }) {
   const { t } = useI18n();
   const ref = useRef<HTMLDialogElement>(null);
-  const [login, setLogin] = useState("");
-  const [target, setTarget] = useState<Recipient | null>(null);
+  const [login, setLogin] = useState(initialContact?.recipient.login ?? "");
+  const [target, setTarget] = useState<{ recipient: Recipient; code?: string } | null>(initialContact ?? null);
+  const [scanning, setScanning] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -43,6 +51,9 @@ export function ShareDialog({
         previous.focus();
     };
   }, []);
+  useEffect(() => {
+    if (disabled) setScanning(false);
+  }, [disabled]);
   async function run(fn: () => Promise<void>) {
     setWorking(true);
     setError("");
@@ -85,7 +96,7 @@ export function ShareDialog({
         {t("ui.recipientLogin")}
         <input
           value={login}
-          disabled={working || disabled}
+          disabled={working || disabled || scanning}
           autoComplete="off"
           onChange={(e) => {
             setLogin(e.target.value);
@@ -95,25 +106,40 @@ export function ShareDialog({
       </label>
       <button
         className="secondary"
-        disabled={working || disabled || !login.trim()}
+        disabled={working || disabled || scanning || !login.trim()}
         onClick={() => {
-          void run(async () => setTarget(await onResolve(login.trim())));
+          void run(async () => setTarget({ recipient: await onResolve(login.trim()) }));
         }}
       >
         {t("ui.verifyRecipient")}
       </button>
+      <button type="button" className="secondary" disabled={working || disabled || scanning} onClick={() => {
+        setTarget(null);
+        setError("");
+        setScanning(true);
+      }}>
+        {t("ui.scanShareContact")}
+      </button>
+      {scanning && !disabled && <ContactScanner onClose={() => setScanning(false)} onScan={(code) => {
+        setScanning(false);
+        void run(async () => {
+          const recipient = await resolveContact(code);
+          setLogin(recipient.login);
+          setTarget({ code, recipient });
+        });
+      }} />}
       {target && (
         <div className="share-recipient">
           <p>
-            <bdi>{target.login}</bdi> · <code>{target.id}</code>
+            <bdi>{target.recipient.login}</bdi> · <code>{target.recipient.id}</code>
           </p>
           <p>
-            <code>{target.fingerprint}</code>
+            <code>{target.recipient.fingerprint}</code>
           </p>
           <p>{t("ui.recipientPublicKeys")}:</p>
-          <code>{target.public_sign}</code>
+          <code>{target.recipient.public_sign}</code>
           <br />
-          <code>{target.public_share}</code>
+          <code>{target.recipient.public_share}</code>
           <p>
             {t(
               "ui.compareKeysWithTheRecipientThroughAnIndependentChannelIfNeeded",
@@ -124,7 +150,7 @@ export function ShareDialog({
             disabled={working || disabled}
             onClick={() => {
               void run(async () => {
-                await onCreate(target.login);
+                await onCreate(target.recipient.login, target.code);
                 setTarget(null);
                 setLogin("");
               });
@@ -140,7 +166,7 @@ export function ShareDialog({
           <bdi>{r.recipient_login}</bdi>
           <button
             className="secondary"
-            disabled={working || disabled}
+            disabled={working || disabled || scanning}
             onClick={() => {
               void run(() => onRevoke(r.share_id));
             }}

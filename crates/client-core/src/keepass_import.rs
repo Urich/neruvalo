@@ -5,8 +5,6 @@ mod metadata;
 mod references;
 
 const JOURNAL: &str = "keepass_import";
-const LAST_REPORT: &str = "keepass_import:last_report";
-const REPORT_CONTEXT: &[u8] = b"neruvalo-keepass-report-v1";
 const CONTEXT: &[u8] = b"neruvalo-keepass-import-v1";
 const MAX_FILE: usize = 16 * 1024 * 1024;
 const MAX_IMPORT: usize = 24 * 1024 * 1024;
@@ -25,6 +23,8 @@ pub struct KeepassIssue {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct KeepassReport {
+    pub report_available: bool,
+    pub omitted_issues: usize,
     pub ticket: String,
     pub folder: String,
     pub entries: usize,
@@ -40,7 +40,11 @@ pub struct KeepassReport {
 }
 #[derive(Serialize, Deserialize)]
 struct Prepared {
+    #[serde(skip)]
     report: KeepassReport,
+    ticket: String,
+    can_confirm: bool,
+    dispatched: bool,
     request: ImportVault,
     #[serde(skip)]
     stored: Option<String>,
@@ -49,6 +53,12 @@ struct Plan {
     report: KeepassReport,
     records: Vec<(String, RecordData, bool)>,
     bytes: usize,
+    blocked: bool,
+    report_bytes: usize,
+}
+struct GroupPolicy<'a> {
+    tags: &'a [String],
+    recycle: Option<Uuid>,
 }
 struct IssueContext {
     name: String,
@@ -101,14 +111,30 @@ impl Plan {
         code: &str,
         blocking: bool,
     ) -> Result<()> {
-        ensure!(self.report.issues.len() < 50000, "IMPORT_TOO_LARGE");
+        self.blocked |= blocking;
+        let field = field.into();
+        let bytes = context.name.len()
+            + context.source_id.len()
+            + context.group_path.iter().map(String::len).sum::<usize>()
+            + field.len()
+            + code.len()
+            + 256;
+        if self.report.issues.len() >= 1000 || self.report_bytes.saturating_add(bytes) > 256 * 1024
+        {
+            self.report.omitted_issues += 1;
+            if blocking {
+                self.report.can_confirm = false;
+            }
+            return Ok(());
+        }
+        self.report_bytes += bytes;
         self.report.issues.push(KeepassIssue {
             code: code.into(),
             item: context.name.clone(),
             blocking,
             group_path: context.group_path.clone(),
             source_id: context.source_id.clone(),
-            field: field.into(),
+            field,
         });
         Ok(())
     }
@@ -118,14 +144,17 @@ impl Plan {
         parent: &str,
         archived: bool,
         depth: usize,
-        inherited_tags: &[String],
-        recycle: Option<Uuid>,
+        policy: GroupPolicy<'_>,
         references: &references::References,
     ) -> Result<()> {
         ensure!(
             depth <= 62 && self.records.len() < 10000,
             "IMPORT_TOO_LARGE"
         );
+        let GroupPolicy {
+            tags: inherited_tags,
+            recycle,
+        } = policy;
         let archived = archived || recycle == Some(group.id().uuid());
         let id = Uuid::new_v4().to_string();
         let title = if group.name.trim().is_empty() {
@@ -337,7 +366,7 @@ impl Plan {
                     )?;
                     continue;
                 }
-                let attachment = match Attachment::from_bytes(name.into(), &bytes) {
+                let attachment = match Attachment::from_bytes(name.into(), bytes) {
                     Ok(file) => file,
                     Err(_) => {
                         self.issue(
@@ -387,7 +416,17 @@ impl Plan {
             self.push(Uuid::new_v4().to_string(), data, archived)?;
         }
         for child in group.groups() {
-            self.group(child, &id, archived, depth + 1, &tags, recycle, references)?;
+            self.group(
+                child,
+                &id,
+                archived,
+                depth + 1,
+                GroupPolicy {
+                    tags: &tags,
+                    recycle,
+                },
+                references,
+            )?;
         }
         Ok(())
     }
@@ -443,7 +482,10 @@ fn parse(
     let root_id = Uuid::new_v4().to_string();
     let mut plan = Plan {
         bytes: 0,
+        blocked: false,
+        report_bytes: 0,
         report: KeepassReport {
+            report_available: true,
             ticket: Uuid::new_v4().to_string(),
             folder: folder.trim().into(),
             groups: 1,
@@ -461,7 +503,14 @@ fn parse(
         db.meta.recyclebin_uuid
     };
     let references = references::References::new(&db);
-    plan.group(db.root(), &root_id, false, 1, &[], recycle, &references)?;
+    plan.group(
+        db.root(),
+        &root_id,
+        false,
+        1,
+        GroupPolicy { tags: &[], recycle },
+        &references,
+    )?;
     plan.report.issues.sort_by(|a, b| {
         (&a.group_path, &a.source_id, &a.field, &a.code).cmp(&(
             &b.group_path,
@@ -474,49 +523,78 @@ fn parse(
         serde_json::to_vec(&plan.report)?.len() <= 8 * 1024 * 1024,
         "IMPORT_TOO_LARGE"
     );
-    plan.report.can_confirm = !plan.report.issues.iter().any(|i| i.blocking);
+    plan.report.can_confirm = !plan.blocked
+        && !plan.report.issues.iter().any(|i| i.blocking)
+        && !plan
+            .records
+            .iter()
+            .any(|(_, data, _)| data.validate().is_err());
     Ok(plan)
 }
 
 async fn load(a: &Unlocked) -> Result<Option<Prepared>> {
-    let row = sqlx::query("SELECT value FROM meta WHERE name=$1")
-        .bind(JOURNAL)
-        .fetch_optional(&a.cache)
-        .await?;
+    let row = integrity::get_meta(a, JOURNAL).await?;
     row.map(|r| -> Result<_> {
-        let envelope: Envelope = serde_json::from_str(&r.get::<String, _>("value"))?;
+        let envelope: Envelope = serde_json::from_str(&r)?;
         let mut prepared: Prepared =
             serde_json::from_slice(&crypto::open(a._root.as_ref(), &envelope, CONTEXT)?)?;
-        prepared.stored = Some(r.get::<String, _>("value"));
+        prepared.report = a
+            .reports
+            .lock()
+            .expect("report memory")
+            .get(&prepared.ticket)
+            .cloned()
+            .unwrap_or_else(|| KeepassReport {
+                ticket: prepared.ticket.clone(),
+                can_confirm: prepared.can_confirm,
+                dispatched: prepared.dispatched,
+                ..Default::default()
+            });
+        prepared.report.dispatched = prepared.dispatched;
+        prepared.stored = Some(r);
         Ok(prepared)
     })
     .transpose()
 }
 async fn store(a: &Unlocked, prepared: &mut Prepared) -> Result<()> {
+    prepared.ticket = prepared.report.ticket.clone();
+    prepared.can_confirm = prepared.report.can_confirm;
+    prepared.dispatched = prepared.report.dispatched;
     let envelope = crypto::seal(
         a._root.as_ref(),
         &Zeroizing::new(serde_json::to_vec(prepared)?),
         CONTEXT,
     )?;
     let encoded = serde_json::to_string(&envelope)?;
-    if let Some(previous) = &prepared.stored {
-        let changed = sqlx::query("UPDATE meta SET value=$1 WHERE name=$2 AND value=$3")
+    let mut tx = a.cache.begin().await?;
+    sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
+        .execute(&mut *tx)
+        .await?;
+    let previous = integrity::verify_cached(&mut tx, a).await?;
+    let changed = if let Some(stored) = &prepared.stored {
+        sqlx::query("UPDATE meta SET value=$1 WHERE name=$2 AND value=$3")
             .bind(&encoded)
             .bind(JOURNAL)
-            .bind(previous)
-            .execute(&a.cache)
+            .bind(stored)
+            .execute(&mut *tx)
             .await?
-            .rows_affected();
-        ensure!(changed == 1, "KEEPASS_IMPORT_PENDING");
+            .rows_affected()
     } else {
-        let changed =
-            sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2) ON CONFLICT(name) DO NOTHING")
-                .bind(JOURNAL)
-                .bind(&encoded)
-                .execute(&a.cache)
-                .await?
-                .rows_affected();
-        ensure!(changed == 1, "KEEPASS_IMPORT_PENDING");
+        sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2) ON CONFLICT(name) DO NOTHING")
+            .bind(JOURNAL)
+            .bind(&encoded)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+    };
+    ensure!(changed == 1, "KEEPASS_IMPORT_PENDING");
+    integrity::refresh(&mut tx, a, &previous).await?;
+    tx.commit().await?;
+    integrity::checkpoint(a).await?;
+    if prepared.report.report_available {
+        let mut reports = a.reports.lock().expect("report memory");
+        reports.clear();
+        reports.insert(prepared.ticket.clone(), prepared.report.clone());
     }
     prepared.stored = Some(encoded);
     Ok(())
@@ -529,17 +607,17 @@ fn writable_vault(a: &Unlocked) -> Result<()> {
     ensure!(!a.needs_sync, "SYNCHRONIZATION_REQUIRED");
     Ok(())
 }
-// The journal, imported versions and completed report change atomically. A failed
+// The journal and imported versions change atomically; reports stay in memory. A failed
 // transaction can be retried with the same ticket without partial imports.
 async fn commit_local_import(a: &Unlocked, mut prepared: Prepared) -> Result<Value> {
     prepared.report.completed = true;
     prepared.report.dispatched = false;
-    let envelope = crypto::seal(
-        a._root.as_ref(),
-        &Zeroizing::new(serde_json::to_vec(&prepared.report)?),
-        REPORT_CONTEXT,
-    )?;
     let mut tx = a.cache.begin().await?;
+    sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
+        .execute(&mut *tx)
+        .await?;
+    let previous = integrity::verify_cached(&mut tx, a).await?;
+    integrity::check_anchor(a, "cache", &previous, &integrity::links(&mut tx).await?)?;
     let removed = sqlx::query("DELETE FROM meta WHERE name=$1 AND value=$2")
         .bind(JOURNAL)
         .bind(&prepared.stored)
@@ -562,27 +640,29 @@ async fn commit_local_import(a: &Unlocked, mut prepared: Prepared) -> Result<Val
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
-        .bind(LAST_REPORT).bind(serde_json::to_string(&envelope)?).execute(&mut *tx).await?;
+    integrity::refresh(&mut tx, a, &previous).await?;
     tx.commit().await?;
+    integrity::checkpoint(a).await?;
+    remember_report(a, prepared.report);
     Ok(json!({"imported": prepared.request.versions.len()}))
 }
 impl Client {
     pub async fn keepass_last_report(&mut self) -> Result<Option<KeepassReport>> {
         let a = self.unlocked()?;
-        let row = sqlx::query("SELECT value FROM meta WHERE name=$1")
-            .bind(LAST_REPORT)
-            .fetch_optional(&a.cache)
-            .await?;
-        row.map(|r| -> Result<_> {
-            let envelope: Envelope = serde_json::from_str(&r.get::<String, _>("value"))?;
-            Ok(serde_json::from_slice(&crypto::open(
-                a._root.as_ref(),
-                &envelope,
-                REPORT_CONTEXT,
-            )?)?)
-        })
-        .transpose()
+        let ticket = a.last_report.lock().expect("report memory").clone();
+        Ok(ticket.and_then(|ticket| {
+            a.reports
+                .lock()
+                .expect("report memory")
+                .get(&ticket)
+                .cloned()
+        }))
+    }
+    pub fn forget_keepass_report(&mut self, ticket: &str) -> Result<()> {
+        let a = self.unlocked()?;
+        a.reports.lock().expect("report memory").remove(ticket);
+        *a.last_report.lock().expect("report memory") = None;
+        Ok(())
     }
     pub async fn keepass_report_html(
         &mut self,
@@ -600,6 +680,7 @@ impl Client {
                 .filter(|r| r.ticket == ticket)
                 .ok_or_else(|| anyhow!("KEEPASS_IMPORT_MISSING"))?
         };
+        ensure!(report.report_available, "KEEPASS_REPORT_UNAVAILABLE");
         Ok(render_report(&report, labels))
     }
     pub async fn keepass_import_status(&mut self) -> Result<Option<KeepassReport>> {
@@ -628,6 +709,7 @@ impl Client {
         // Parsing runs outside this task; recheck the destination before staging writes.
         ensure!(a.profile.id == profile, "KEEPASS_PROFILE_CHANGED");
         let mut request = ImportVault {
+            manifest: None,
             operation_id: Uuid::new_v4().to_string(),
             versions: vec![],
         };
@@ -644,6 +726,9 @@ impl Client {
                 ),
             )?;
             let mut save = SaveRecord {
+                signature_version: SIGNATURE_VERSION,
+                created_at: signed_time(),
+                manifest: None,
                 operation_id: Uuid::new_v4().to_string(),
                 record_id,
                 version_id,
@@ -659,6 +744,7 @@ impl Client {
                 &save,
             ));
             request.versions.push(StoredVersion {
+                signature_version: SIGNATURE_VERSION,
                 operation_id: save.operation_id,
                 record_id: save.record_id,
                 version_id: save.version_id,
@@ -667,9 +753,7 @@ impl Client {
                 payload: save.payload,
                 signature: save.signature,
                 archived,
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)?
-                    .as_secs() as i64,
+                created_at: save.created_at,
             });
         }
         ensure!(
@@ -677,13 +761,11 @@ impl Client {
             "IMPORT_TOO_LARGE"
         );
         // Leave room in the current full snapshot for the entire atomic import.
-        let existing = sqlx::query("SELECT body FROM versions")
-            .fetch_all(&a.cache)
-            .await?;
-        let current: usize = existing
-            .iter()
-            .map(|r| r.get::<String, _>("body").len())
-            .sum();
+        let current = sqlx::query("SELECT COALESCE(SUM(length(body)),0) AS bytes FROM versions")
+            .fetch_one(&a.cache)
+            .await?
+            .try_get::<i64, _>("bytes")?;
+        let current = usize::try_from(current).map_err(|_| anyhow!("IMPORT_TOO_LARGE"))?;
         let sharing = sqlx::query("SELECT value FROM meta WHERE name='sharing'")
             .fetch_optional(&a.cache)
             .await?
@@ -693,6 +775,9 @@ impl Client {
             "IMPORT_TOO_LARGE"
         );
         let mut prepared = Prepared {
+            ticket: plan.report.ticket.clone(),
+            can_confirm: plan.report.can_confirm,
+            dispatched: false,
             report: plan.report,
             request,
             stored: None,
@@ -707,13 +792,22 @@ impl Client {
             .ok_or_else(|| anyhow!("KEEPASS_IMPORT_MISSING"))?;
         ensure!(prepared.report.ticket == ticket, "KEEPASS_IMPORT_MISSING");
         ensure!(!prepared.report.dispatched, "KEEPASS_IMPORT_UNCERTAIN");
+        let mut tx = a.cache.begin().await?;
+        sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
+            .execute(&mut *tx)
+            .await?;
+        let previous = integrity::verify_cached(&mut tx, a).await?;
         let changed = sqlx::query("DELETE FROM meta WHERE name=$1 AND value=$2")
             .bind(JOURNAL)
             .bind(&prepared.stored)
-            .execute(&a.cache)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
         ensure!(changed == 1, "KEEPASS_IMPORT_PENDING");
+        integrity::refresh(&mut tx, a, &previous).await?;
+        tx.commit().await?;
+        integrity::checkpoint(a).await?;
+        a.reports.lock().expect("report memory").remove(ticket);
         Ok(())
     }
     pub async fn commit_keepass_import(&mut self, ticket: &str) -> Result<Value> {
@@ -730,6 +824,11 @@ impl Client {
         if a.profile.kind == ProfileKind::Local {
             return commit_local_import(a, prepared).await;
         }
+        if prepared.request.manifest.is_none() {
+            let mut request = serde_json::to_value(&prepared.request)?;
+            integrity::attach_request(a, &mut request).await?;
+            prepared.request = serde_json::from_value(request)?;
+        }
         prepared.report.dispatched = true;
         store(a, &mut prepared).await?;
         let result = http
@@ -741,6 +840,7 @@ impl Client {
         let result = result.map_err(|_| anyhow!("KEEPASS_IMPORT_UNCERTAIN"))?;
         if result.status().is_client_error() {
             prepared.report.dispatched = false;
+            prepared.request.manifest = None;
             store(a, &mut prepared).await?;
         }
         let result: Value = response(result).await?;
@@ -760,21 +860,31 @@ impl Client {
             view(a, &actual)?.data.validate()?;
         }
         prepared.report.completed = true;
-        let envelope = crypto::seal(
-            a._root.as_ref(),
-            &Zeroizing::new(serde_json::to_vec(&prepared.report)?),
-            REPORT_CONTEXT,
-        )?;
         let mut tx = a.cache.begin().await?;
-        sqlx::query("INSERT INTO meta(name,value) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
-            .bind(LAST_REPORT).bind(serde_json::to_string(&envelope)?).execute(&mut *tx).await?;
+        sqlx::query("UPDATE meta SET value=value WHERE name='schema_version'")
+            .execute(&mut *tx)
+            .await?;
+        let previous = integrity::verify_cached(&mut tx, a).await?;
         sqlx::query("DELETE FROM meta WHERE name=$1 AND value=$2")
             .bind(JOURNAL)
             .bind(&prepared.stored)
             .execute(&mut *tx)
             .await?;
+        integrity::refresh(&mut tx, a, &previous).await?;
         tx.commit().await?;
+        integrity::checkpoint(a).await?;
+        prepared.report.dispatched = false;
+        remember_report(a, prepared.report);
         Ok(result)
+    }
+}
+
+fn remember_report(a: &Unlocked, report: KeepassReport) {
+    if report.report_available {
+        *a.last_report.lock().expect("report memory") = Some(report.ticket.clone());
+        let mut reports = a.reports.lock().expect("report memory");
+        reports.clear();
+        reports.insert(report.ticket.clone(), report);
     }
 }
 
@@ -994,7 +1104,7 @@ mod tests {
             entry.set_unprotected("Title", "Linked");
             entry.set_protected(
                 "Password",
-                &format!("{{REF:P@I:{}}}", source.uuid().simple()),
+                format!("{{REF:P@I:{}}}", source.uuid().simple()),
             );
             entry.set_unprotected("UserName", "{S:Email}");
             entry.set_unprotected("Email", "name@example.test");
@@ -1048,9 +1158,10 @@ mod tests {
             .issues
             .iter()
             .any(|i| i.code == "references_resolved"));
-        let mut entry = db.entry_mut(linked).unwrap();
-        entry.set_protected("Password", "{REF:P@T:Missing}");
-        drop(entry);
+        {
+            let mut entry = db.entry_mut(linked).unwrap();
+            entry.set_protected("Password", "{REF:P@T:Missing}");
+        }
         db.save(
             &mut std::fs::File::create(&file).unwrap(),
             DatabaseKey::new().with_password("demopass"),
@@ -1225,8 +1336,7 @@ mod tests {
         store(a, &mut prepared).await.unwrap();
         c.commit_keepass_import(&preview.ticket).await.unwrap();
         assert!(c.keepass_import_status().await.unwrap().is_none());
-        let report = c.keepass_last_report().await.unwrap().unwrap();
-        assert!(report.completed && !report.dispatched);
+        assert!(c.keepass_last_report().await.unwrap().is_none());
         let entries = c.list().await.unwrap();
         assert_eq!(entries.len(), preview.entries);
         assert_eq!(c.groups().await.unwrap().len(), preview.groups + 1);
@@ -1238,7 +1348,7 @@ mod tests {
         assert_eq!(c.list().await.unwrap().len(), preview.entries);
         c.lock();
         c.unlock_offline(&profile, vault_password()).await.unwrap();
-        assert!(c.keepass_last_report().await.unwrap().unwrap().completed);
+        assert!(c.keepass_last_report().await.unwrap().is_none());
         assert_eq!(c.list().await.unwrap().len(), preview.entries);
     }
 
@@ -1344,6 +1454,21 @@ mod tests {
             .get("value");
         assert!(!journal.contains("test-secret"));
         assert!(!journal.contains("Imported"));
+        let envelope: Envelope = serde_json::from_str(&journal).unwrap();
+        let journal_value: Value =
+            serde_json::from_slice(&crypto::open(a._root.as_ref(), &envelope, CONTEXT).unwrap())
+                .unwrap();
+        for forbidden in ["report", "issues", "folder", "entries", "groups"] {
+            assert!(journal_value.get(forbidden).is_none(), "{forbidden}");
+        }
+        assert_eq!(journal_value["ticket"], preview.ticket);
+        assert!(
+            sqlx::query("SELECT value FROM meta WHERE name='keepass_import:last_report'")
+                .fetch_optional(&a.cache)
+                .await
+                .unwrap()
+                .is_none()
+        );
         let mut stale = load(a).await.unwrap().unwrap();
         let mut latest = load(a).await.unwrap().unwrap();
         store(a, &mut latest).await.unwrap();
@@ -1379,17 +1504,9 @@ mod tests {
         assert_eq!(pending.ticket, preview.ticket);
         c.commit_keepass_import(&pending.ticket).await.unwrap();
         assert!(c.keepass_import_status().await.unwrap().is_none());
-        let completed = c.keepass_last_report().await.unwrap().unwrap();
-        assert_eq!(completed.ticket, preview.ticket);
-        assert!(completed.completed);
-        let html = c
-            .keepass_report_html(&completed.ticket, &BTreeMap::new())
-            .await
-            .unwrap();
-        assert!(html.contains("History[1].Password"));
-        assert!(!html.contains("test-secret"));
+        assert!(c.keepass_last_report().await.unwrap().is_none());
         assert!(c
-            .keepass_report_html("other-profile-ticket", &BTreeMap::new())
+            .keepass_report_html(&preview.ticket, &BTreeMap::new())
             .await
             .is_err());
         let records = c.list().await.unwrap();
