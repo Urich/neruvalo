@@ -29,7 +29,6 @@ async fn main() -> anyhow::Result<()> {
     let socket = config.listen;
     let app = neruvalo_server::application_with_config(&config).await?;
     let listener = tokio::net::TcpListener::bind(socket).await?;
-    tracing::info!(%socket,"Neruvalo development server ready; email codes are written to the private dev outbox");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

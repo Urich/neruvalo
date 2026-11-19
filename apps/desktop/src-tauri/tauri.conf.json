@@ -15,7 +15,7 @@
   "app": {
     "windows": [
       {
-        "title": "Neruvalo \u00b7 Prototype",
+        "title": "Neruvalo",
         "width": 1320,
         "height": 900,
         "minWidth": 900,
@@ -31,7 +31,7 @@
     "targets": [
       "nsis"
     ],
-    "shortDescription": "Self-hosted password and secrets manager prototype",
+    "shortDescription": "Self-hosted password and secrets manager",
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"

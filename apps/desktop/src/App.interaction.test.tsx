@@ -28,12 +28,14 @@ Object.defineProperties(HTMLDialogElement.prototype, {
     configurable: true,
     value: function (this: HTMLDialogElement) {
       this.open = true;
+      this.dataset.modal = "true";
     },
   },
   close: {
     configurable: true,
     value: function (this: HTMLDialogElement) {
       this.open = false;
+      delete this.dataset.modal;
     },
   },
 });
@@ -1026,7 +1028,7 @@ describe("local proxy settings", () => {
   });
 });
 
-it("opens the registration verification only after submitting the completed form", async () => {
+it("opens verification after registration submission and lets the user cancel email confirmation", async () => {
   const original = native.invoke.getMockImplementation()!;
   const listeners = new Map<string, (event: { payload: unknown }) => void>();
   native.listen.mockImplementation(async (name, listener) => {
@@ -1049,34 +1051,137 @@ it("opens the registration verification only after submitting the completed form
   await change(document.querySelector<HTMLInputElement>('input[autocomplete="username"]')!, "alice");
   await change(document.querySelector<HTMLInputElement>('input[type="email"]')!, "a@example.test");
   await change(document.querySelector<HTMLInputElement>('input[autocomplete="new-password"]')!, "server-password-123");
-  expect(document.querySelector(".verification-inline, .verification-dialog, .registration-verification")).toBeNull();
+  expect(document.querySelector(".auth-verification")).toBeNull();
   expect(native.invoke.mock.calls.some(([, args]) =>
     ["prepare_verification", "register_begin"].includes(args.request.action))).toBe(false);
 
   const submit = document.querySelector<HTMLButtonElement>("form > button.primary")!;
   await click(submit);
-  const section = submit.nextElementSibling?.querySelector(".registration-verification")!;
-  expect(document.querySelector(".verification-dialog")).toBeNull();
-  expect(section.querySelector("h3")?.textContent).toBe("Пройдите проверку.");
+  const section = submit.nextElementSibling?.querySelector<HTMLElement>(".auth-verification")!;
+  expect(section.querySelector("h3, button")).toBeNull();
   const frame = section.querySelector("iframe")!;
-  await act(async () => window.dispatchEvent(new MessageEvent("message", {
+  const dialog = frame.closest("dialog")!;
+  const notify = (state: string) => act(async () => window.dispatchEvent(new MessageEvent("message", {
     origin: "https://a.example",
     source: frame.contentWindow,
-    data: { type: "neruvalo-verification", state: "visual" },
+    data: { type: "neruvalo-verification", state },
   })));
-  expect(section.classList.contains("registration-verification-visual")).toBe(true);
+  await notify("checking");
+  expect(frame.hidden).toBe(true);
+  expect(section.querySelector('[role="status"]')?.textContent).toBe("Проверяем…");
+  await notify("visual");
+  expect(frame.hidden).toBe(false);
+  expect(dialog.dataset.modal).toBe("true");
   expect(section.querySelector("iframe")).toBe(frame);
+  expect(section.querySelector('[role="status"]')?.textContent).toBe("");
   expect(submit.disabled).toBe(true);
   const registration = native.invoke.mock.calls.find(([, args]) => args.request.action === "register_begin")?.[1].request;
   expect(registration).toMatchObject({ login: "alice", email: "a@example.test" });
   expect(registration).not.toHaveProperty("verification_secret");
 
+  await notify("verified");
+  expect(frame.hidden).toBe(true);
+  expect(dialog.open).toBe(false);
   await act(async () => {
     listeners.get("verification-close")!({ payload: "register-check" });
     finishRegistration({ ticket: "registration" });
   });
-  expect(document.querySelector(".registration-verification")).toBeNull();
+  expect(document.querySelector(".auth-verification")).toBeNull();
   expect(document.querySelector(".ticket")?.textContent).toContain("registration");
+
+  const card = document.querySelector(".auth-card")!;
+  expect([...card.querySelectorAll("button")].map((action) => action.textContent?.trim())).toEqual([
+    translate("ui.confirm"), translate("ui.cancel"),
+  ]);
+  const confirm = button(translate("ui.confirm"), card);
+  expect(confirm.disabled).toBe(true);
+  await change(card.querySelector<HTMLInputElement>('input[autocomplete="off"]')!, "email-code");
+  expect(confirm.disabled).toBe(false);
+  await click(button(translate("ui.cancel"), card));
+  const actions = native.invoke.mock.calls.map(([, args]) => args.request.action);
+  expect(actions).toContain("register_cancel");
+  expect(actions).not.toContain("register_finish");
+  expect(card.querySelector(".ticket")).toBeNull();
+  expect(card.querySelector<HTMLInputElement>('input[autocomplete="username"]')?.value).toBe("alice");
+  expect(card.querySelector<HTMLInputElement>('input[type="email"]')?.value).toBe("a@example.test");
+  expect(card.querySelector<HTMLInputElement>('input[autocomplete="new-password"]')?.value).toBe("");
+});
+
+it("checks online login below the unlock button and waits for resubmission after cancellation", async () => {
+  const original = native.invoke.getMockImplementation()!;
+  const listeners = new Map<string, (event: { payload: unknown }) => void>();
+  native.listen.mockImplementation(async (name, listener) => {
+    listeners.set(name, listener);
+    return () => listeners.delete(name);
+  });
+  let attempts = 0;
+  let finish!: () => void;
+  let cancel!: () => void;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "cancel_verification") {
+      cancel();
+      return null;
+    }
+    if (args.request.action === "login") {
+      const id = `login-${++attempts}`;
+      listeners.get("verification-open")!({ payload: { id, url: "https://a.example/verification#attempt" } });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          finish = resolve;
+          cancel = () => reject(new Error("VERIFICATION_CANCELLED"));
+        });
+      } finally {
+        listeners.get("verification-close")!({ payload: id });
+      }
+    }
+    return original(command, args);
+  });
+  await mount();
+  const submit = document.querySelector<HTMLButtonElement>("form > button.primary")!;
+  const username = document.querySelector<HTMLInputElement>('input[autocomplete="username"]')!;
+  const password = document.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')!;
+  await change(password, "server-password-123");
+  await click(submit);
+  expect(attempts).toBe(0);
+
+  await change(username, "alice");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+  expect(document.querySelector(".auth-verification")).toBeNull();
+  expect(native.invoke.mock.calls.some(([, args]) => args.request?.action === "prepare_verification")).toBe(false);
+  expect(attempts).toBe(0);
+
+  const notify = (frame: HTMLIFrameElement, state: string) => act(async () => window.dispatchEvent(new MessageEvent("message", {
+    origin: "https://a.example", source: frame.contentWindow,
+    data: { type: "neruvalo-verification", state },
+  })));
+  await click(submit);
+  const firstFrame = submit.nextElementSibling?.querySelector(".auth-verification iframe") as HTMLIFrameElement;
+  expect(firstFrame.hidden).toBe(false);
+  await notify(firstFrame, "cancel");
+  expect(document.querySelector(".auth-verification")).toBeNull();
+  expect(attempts).toBe(1);
+  expect(submit.disabled).toBe(false);
+
+  await click(submit);
+  const section = submit.nextElementSibling?.querySelector<HTMLElement>(".auth-verification")!;
+  const frame = section.querySelector("iframe")!;
+  const dialog = frame.closest("dialog")!;
+  expect(frame).not.toBe(firstFrame);
+  expect(submit.disabled).toBe(true);
+  await notify(frame, "checking");
+  expect(frame.hidden).toBe(true);
+  expect(section.querySelector('[role="status"]')?.textContent).toBe(translate("ui.verificationChecking"));
+  await notify(frame, "visual");
+  expect(frame.hidden).toBe(false);
+  expect(dialog.dataset.modal).toBe("true");
+  expect(section.querySelector("iframe")).toBe(frame);
+  await notify(frame, "verified");
+  expect(frame.hidden).toBe(true);
+  expect(dialog.open).toBe(false);
+  await act(async () => finish());
+  expect(document.querySelector(".auth-verification")).toBeNull();
+  expect(document.querySelector(".account-identity")).not.toBeNull();
+  expect(attempts).toBe(2);
 });
 
 it("clears the registration form after the server rejects the third email code", async () => {
@@ -1123,7 +1228,6 @@ it("creates and edits a local vault without requesting a server or bot check", a
   native.invoke.mockImplementation((...args) => {
     const request = args[1].request;
     if (request.action === "lock") { local = false; native.unlocked = false; return Promise.resolve(null); }
-    if (request.action === "prepare_verification") return Promise.resolve({enabled:true,secret:"a".repeat(43),url:"https://a.example/verification#proof"});
     if (request.action === "local_file_info") return Promise.resolve({path:`/vaults/${request.path}`,exists:false});
     if (request.action === "create_local_file") { local = true; created = true; native.unlocked = true; return Promise.resolve({local:true}); }
     if (request.action === "status" && local) return Promise.resolve({unlocked:true,local:true,online:false,profile:"local-1",login:"Personal",server:"",timeout_seconds:300});
@@ -1152,23 +1256,12 @@ it("creates and edits a local vault without requesting a server or bot check", a
   expect(document.querySelector('option[value="local-1"]')).toBeNull();
   expect(document.querySelector(".auth-card")?.textContent).not.toContain("Sign in or create a server account.");
   await change(document.querySelector<HTMLInputElement>('input[autocomplete="username"]')!, "server_user");
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
-  const prepared = native.invoke.mock.calls.find(([, args]) => args.request.action === "prepare_verification");
-  expect(prepared?.[1].request.server).toBe("https://a.example");
-  expect(prepared?.[1].request.kind).toBe("login");
-  const frame = document.querySelector<HTMLIFrameElement>(".verification-inline iframe")!;
-  expect(frame).not.toBeNull();
-  const submit = document.querySelector<HTMLButtonElement>('form > button.primary')!;
-  expect(submit.disabled).toBe(true);
-  await act(async () => window.dispatchEvent(new MessageEvent("message", {
-    origin:"https://a.example", source:frame.contentWindow,
-    data:{type:"neruvalo-verification",state:"verified"},
-  })));
-  expect(submit.disabled).toBe(false);
   await change(document.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')!, "server-password-123");
-  await click(submit);
+  expect(document.querySelector(".auth-verification")).toBeNull();
+  await click(document.querySelector<HTMLButtonElement>("form > button.primary")!);
   const loginCall = native.invoke.mock.calls.find(([, args]) => args.request.action === "login");
-  expect(loginCall?.[1].request).toMatchObject({server:"https://a.example",login:"server_user",password:"server-password-123",verification_secret:"a".repeat(43)});
+  expect(loginCall?.[1].request).toMatchObject({server:"https://a.example",login:"server_user",password:"server-password-123"});
+  expect(loginCall?.[1].request).not.toHaveProperty("verification_secret");
   expect(native.invoke.mock.calls.some(([, args]) => args.request.action === "unlock_offline")).toBe(false);
   expect(document.querySelector(".local-vault-dialog")?.textContent).toContain("Import local vault");
   expect(document.querySelector<HTMLSelectElement>('.local-vault-dialog select')?.value).toBe("local-1");
@@ -1176,7 +1269,9 @@ it("creates and edits a local vault without requesting a server or bot check", a
 
 it("places Import above Settings and groups import sources on their own page", async () => {
   setPreference("en");
-  await mount(); await login();
+  await mount();
+  expect(document.querySelector(".sidebar-bottom")?.textContent).not.toContain("Import");
+  await login();
   const navigation = [...document.querySelectorAll<HTMLButtonElement>(".sidebar-bottom button")];
   const imports = navigation.findIndex(b => b.textContent?.trim() === "Import");
   const settings = navigation.findIndex(b => b.textContent?.trim() === "Settings");

@@ -8,7 +8,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 #[derive(Parser)]
-#[command(about = "Neruvalo native prototype client. Test data only.")]
+#[command(about = "Neruvalo command-line client")]
 struct Args {
     #[arg(long, default_value = "local-data/client")]
     data_dir: PathBuf,

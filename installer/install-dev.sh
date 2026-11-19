@@ -13,7 +13,7 @@ sqlite_url() {
 }
 command -v cargo >/dev/null || { echo 'Install Rust (stable) and rerun. See docs/prototype.ru.md.' >&2; exit 1; }
 command -v cc >/dev/null || { echo 'A C compiler is required to build bundled SQLite.' >&2; exit 1; }
-echo 'Neruvalo development prototype — TEST DATA ONLY.'
+echo 'Neruvalo development setup'
 echo 'This script does not configure public access, SMTP or CAPTCHA.'
 read -r -p "Installation directory [$HOME/neruvalo-prototype]: " install_dir
 install_dir=${install_dir:-"$HOME/neruvalo-prototype"}
@@ -30,7 +30,7 @@ read -r -p 'Loopback TCP port [8787]: ' port
 port=${port:-8787}
 [[ $port =~ ^[0-9]+$ ]] && ((port>=1024 && port<=65535)) || { echo 'Invalid port.' >&2; exit 1; }
 printf '\nDirectory: %s\nListener: 127.0.0.1:%s\nDatabase choice: %s\n' "$install_dir" "$port" "${database_choice:-1}"
-read -r -p 'Build and install this prototype? [y/N]: ' answer
+read -r -p 'Build and install Neruvalo? [y/N]: ' answer
 [[ $answer == y || $answer == Y ]] || { echo 'Cancelled.'; exit 0; }
 (cd "$root_dir" && cargo build --locked --release -p neruvalo-server)
 mkdir -p -- "$install_dir/bin" "$install_dir/data" "$install_dir/dev-outbox"

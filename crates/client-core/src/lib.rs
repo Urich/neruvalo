@@ -572,7 +572,7 @@ impl Client {
     }
     pub fn lock(&mut self) {
         self.active = None;
-        self.pending = None;
+        self.register_cancel();
         self.certificate = None;
     }
     fn unlocked(&mut self) -> Result<&mut Unlocked> {
@@ -794,13 +794,16 @@ impl Client {
                     error.to_string().as_str(),
                     REGISTRATION_CODE_ATTEMPTS_EXHAUSTED | REGISTRATION_EXPIRED
                 ) {
-                    self.pending = None;
+                    self.register_cancel();
                 }
                 return Err(error);
             }
         };
         self.certificate = self.pending.take().and_then(|p| p.certificate);
         Ok(result)
+    }
+    pub fn register_cancel(&mut self) {
+        self.pending = None;
     }
     pub fn save_certificate_to(&mut self, path: &Path) -> Result<()> {
         use std::io::Write;

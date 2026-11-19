@@ -5,29 +5,40 @@ export const sliderCSS = `
 :host([data-theme=dark]){--gv-background:var(--gateveriq-background,#19212e);--gv-text:var(--gateveriq-text,#e6edf7);--gv-muted:var(--gateveriq-muted,#9baac0);--gv-border:var(--gateveriq-border,#334155);--gv-surface:var(--gateveriq-surface,#242f40);--gv-accent:var(--gateveriq-accent,#85acff);color-scheme:dark}
 @media(prefers-color-scheme:dark){:host([data-theme=auto]){--gv-background:var(--gateveriq-background,#19212e);--gv-text:var(--gateveriq-text,#e6edf7);--gv-muted:var(--gateveriq-muted,#9baac0);--gv-border:var(--gateveriq-border,#334155);--gv-surface:var(--gateveriq-surface,#242f40);--gv-accent:var(--gateveriq-accent,#85acff);color-scheme:dark}}
 *{box-sizing:border-box}
-.card{padding:11px;border:1px solid var(--gv-border);border-radius:var(--gv-radius);background:var(--gv-background);color:var(--gv-text)}
+.card{padding:12px;border-radius:var(--gv-radius);background:var(--gv-background);color:var(--gv-text)}
 .heading{margin:0 0 9px;font-size:12px;font-weight:600;letter-spacing:.01em}
-.stage{position:relative;width:100%;aspect-ratio:2;overflow:hidden;border-radius:8px;background:var(--gv-surface)}
-.background{display:block;width:100%;height:100%;user-select:none;-webkit-user-drag:none}
-.piece{position:absolute;pointer-events:none;user-select:none;-webkit-user-drag:none;filter:drop-shadow(0 1px 2px #0008)}
-.track{direction:ltr;position:relative;height:40px;margin-top:10px;border:1px solid var(--gv-border);border-radius:8px;background:var(--gv-surface);overflow:hidden}
+.stage{display:block;width:100%;height:auto;border-radius:8px;background:var(--gv-surface);user-select:none}
+.track{direction:ltr;position:relative;height:40px;margin-top:10px;border:1px solid var(--gv-border);border-radius:8px;background:var(--gv-surface);overflow:hidden;cursor:grab;touch-action:pan-y;user-select:none}
+.track:active{cursor:grabbing}
+.track:has(input:disabled){cursor:default}
 .track-label{position:absolute;inset:0;display:grid;place-items:center;color:var(--gv-muted);font-size:11px;pointer-events:none}
-.handle{position:absolute;inset-block:2px;width:34px;display:grid;place-items:center;border-radius:5px;background:var(--gv-background);border:1px solid var(--gv-border);color:var(--gv-accent);font-size:20px;box-shadow:0 1px 3px #0001;pointer-events:none}
-input{position:absolute;inset:0;width:100%;height:100%;margin:0;appearance:none;-webkit-appearance:none;background:transparent;cursor:grab;touch-action:pan-y;opacity:0}
-input:active{cursor:grabbing}
-.track:focus-within{outline:2px solid var(--gv-accent);outline-offset:2px}
-input::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:38px;height:38px}
-input::-moz-range-thumb{width:38px;height:38px;border:0;background:transparent}
-.footer{display:flex;align-items:center;gap:8px;justify-content:space-between;margin-top:9px;min-height:28px}
-.note{margin:0;color:var(--gv-muted);font-size:11px;flex:1;min-width:0}
-button{font:inherit;font-size:11px;font-weight:600;border:0;border-radius:6px;background:var(--gv-accent);color:var(--gv-background);padding:6px 10px;cursor:pointer;flex-shrink:0}
-button:focus-visible{outline:2px solid var(--gv-accent);outline-offset:3px}
-button:disabled{opacity:.45;cursor:default}
+.handle{position:absolute;left:var(--slider-progress,0%);transform:translateX(calc(0% - var(--slider-progress,0%)));inset-block:2px;width:34px;display:grid;place-items:center;border-radius:5px;background:var(--gv-background);border:1px solid var(--gv-border);color:var(--gv-accent);font-size:20px;box-shadow:0 1px 3px #0001;pointer-events:none}
+input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;pointer-events:none}
+.track:has(input:focus-visible){border-color:var(--gv-accent);box-shadow:0 0 0 1px var(--gv-accent)}
+.note{margin:9px 0 0;color:var(--gv-muted);font-size:11px}
+.note:empty{margin:0}
 .card[data-state=error] .note{color:var(--gv-text)}
 .card[data-state=success]{display:flex;align-items:center;gap:8px;min-height:52px}
 .success-icon{font-size:18px;color:var(--gv-accent)}
-@media(forced-colors:active){.handle,.track,button{border:1px solid ButtonText}.handle{color:ButtonText}button{background:ButtonFace;color:ButtonText}}
+@media(forced-colors:active){.handle,.track{border:1px solid ButtonText}.handle{color:ButtonText}}
 `;
+
+export function sliderStage({width, height, piece_size: size, piece_y: top}) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'stage';
+  canvas.width = width;
+  canvas.height = height;
+  canvas.setAttribute('aria-hidden', 'true');
+  const context = canvas.getContext('2d', {alpha: false});
+  if (!context) return null;
+
+  function draw(background, piece, position) {
+    context.drawImage(background, 0, 0, width, height);
+    context.drawImage(piece, position, top, size, size);
+  }
+
+  return {canvas, draw};
+}
 
 export function sliderRoot(element, theme = 'auto', styleNonce) {
   const host = document.createElement('div');
@@ -62,7 +73,8 @@ export function sliderState(element, message, state = 'busy') {
   card?.setAttribute('aria-busy', String(state === 'busy'));
   const note = root.querySelector('.note');
   if (note) note.textContent = message;
-  for (const control of root.querySelectorAll('input,button')) control.disabled = true;
+  const range = root.querySelector('input[type="range"]');
+  if (range) range.disabled = true;
   if (state === 'success') {
     const icon = document.createElement('span'); icon.className = 'success-icon';
     icon.textContent = '✓'; icon.setAttribute('aria-hidden','true');

@@ -86,24 +86,21 @@ generated random context is rejected as `INVALID_CONTEXT`.
 The internal API and integration secret belong on the backend.
 Use HTTPS outside loopback development. Keep the internal listener private.
 
-For registration, the desktop shows the verification frame below **Create account**
-after the user selects it. Verification is bound to the submitted registration
-request. After three failed registration requests for the same login within
-the history window, the next registration attempt gets a slider. GateVeriq can
-also request a slider earlier based on browser risk signals.
-
-For login, the desktop prepares a check after the user enters the server and
-login. The checkbox appears below the password and enables submission when
-verification succeeds. The slider opens in a modal when GateVeriq requests it.
-The application language is passed as the widget locale.
+The desktop shows the verification frame below **Create account** or **Unlock
+vault** after the user submits the corresponding form. The frame starts with an
+**I am human** checkbox and gives way to a progress indicator during the check.
+If GateVeriq requires a slider, the existing frame opens in a modal. After three
+failed requests for the same login and action within the history window, the next
+attempt gets a slider. GateVeriq can also request a slider earlier based on browser
+risk signals. The application language is passed as the widget locale.
 
 Frames are sandboxed without Tauri capabilities, popups, forms or top navigation.
 Frame messages are checked against both origin and source; only the backend can
 accept the GateVeriq token. Checks expire after at most three minutes or at
-the GateVeriq context deadline, whichever comes first. The inline login check
-is bound to the login, and the registration check is bound to the submitted
-request. The server consumes the check before dispatch. Cancelling the
-registration check ends the attempt. To try again, select **Create account**.
+the GateVeriq context deadline, whichever comes first. Each check is bound to
+the submitted request, and the server consumes it before dispatch. Pressing
+Escape inside the frame or selecting **Cancel** in the slider modal cancels the
+attempt. Submit the form again to start a new attempt.
 The password and OPAQUE message are created separately and are never sent to
 GateVeriq. Offline unlocking requires no verification.
 
@@ -143,7 +140,6 @@ The browser adapter vendors `widget.js`, `worker.js` and `slider.js` together.
 It supports the slider puzzle, replacement tasks after a wrong position, and the
 `pow`/`pow_visual` consume results. The inline frame receives the application's
 resolved theme and uses the same CSS palette, including its shadow-root slider.
-Its permission is refreshed according to the backend deadline, not a fixed timer.
 Expired/spent permissions return `VERIFICATION_EXPIRED`; mismatched permissions
 return `VERIFICATION_FAILED`, separately from OPAQUE's `AUTH_FAILED`.
 Account names accept `[A-Za-z0-9_-]{3,40}` and are normalized to lowercase
@@ -161,6 +157,7 @@ NERUVALO_TEST_GATE_CONFIG="$PWD/neruvalo-server.toml" \
   cargo test --locked -p neruvalo-client --test gateveriq -- --ignored
 ```
 
-Slider UI, locale, theme propagation and deadline behavior are covered by
-`verificationWidget.test.ts` and `VerificationInline.test.tsx`. A manual WebView
+Slider UI, locale, theme propagation and frame behavior are covered by
+`verificationWidget.test.ts`, `VerificationFrame.test.tsx` and
+`App.interaction.test.tsx`. A manual WebView
 check is still required for real pointer/touch interaction and visual matching.

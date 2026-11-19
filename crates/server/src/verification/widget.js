@@ -1,10 +1,9 @@
-import {sliderRoot, sliderState} from './slider.js';
+import {sliderRoot, sliderStage, sliderState} from './slider.js';
 const workerURL = new URL('./worker.js', import.meta.url);
 const visualMessages = {
   en: {
     instruction: 'Fit the puzzle piece', drag: 'Slide to align', position: 'Puzzle piece position',
-    loading: 'Loading puzzle…', ready: 'Release or press Enter',
-    confirm: 'Check',
+    loading: 'Loading puzzle…',
     checking: 'Checking puzzle…', completed: 'Verification completed',
     retry: 'Try again with this new puzzle.',
     expired: 'Visual challenge expired. Start a new verification.',
@@ -14,8 +13,7 @@ const visualMessages = {
   },
   ru: {
     instruction: 'Совместите фрагмент с вырезом', drag: 'Потяните вправо', position: 'Положение фрагмента',
-    loading: 'Загружаем пазл…', ready: 'Отпустите или Enter',
-    confirm: 'Проверить',
+    loading: 'Загружаем пазл…',
     checking: 'Проверяем пазл…', completed: 'Проверка завершена',
     retry: 'Не совпало. Попробуйте новый пазл.',
     expired: 'Время задания истекло. Начните проверку заново.',
@@ -31,7 +29,6 @@ export function configureMessages(bundle) {
     visualMessages[language] = {
       instruction:t.verificationSliderInstruction, drag:t.verificationSliderDrag,
       position:t.verificationSliderPosition, loading:t.verificationPreparing,
-      ready:t.verificationSliderReady, confirm:t.verificationSliderConfirm,
       checking:t.verificationChecking, completed:t.verificationCompleted,
       retry:t.verificationSliderRetry, expired:t.verificationExpired,
       exhausted:t.verificationExpired, cancelled:t.verificationCancelled,
@@ -99,7 +96,7 @@ export function showLoading(element, message = 'Checking request...') {
 }
 
 /** Collect only aggregate interactions inside the widget; never keys or coordinates. */
-export function collectBehavior(element, challenge, signal, locale) {
+export function collectBehavior(element, challenge, signal, locale, {keepCheckbox = false} = {}) {
   return new Promise((resolve, reject) => {
     const started = performance.now();
     const data = {challenge_id: challenge.challenge_id, elapsed_ms: 0, activation_ms: 0,
@@ -125,19 +122,21 @@ export function collectBehavior(element, challenge, signal, locale) {
       element.removeEventListener('focusin', focus);
       checkbox.removeEventListener('change', activate);
       signal.removeEventListener('abort', abort);
-      label.remove();
     };
-    const abort = () => { cleanup(); reject(new Error('Cancelled')); };
+    const abort = () => { cleanup(); label.remove(); reject(new Error('Cancelled')); };
     const activate = event => {
       const elapsed = Math.floor(performance.now() - started);
       if (!checkbox.checked) return;
       data.activation_ms = elapsed; data.elapsed_ms = elapsed;
       data.trusted_activations = event.isTrusted ? 1 : 0;
-      cleanup(); resolve(data);
+      cleanup();
+      if (keepCheckbox) checkbox.disabled = true;
+      else label.remove();
+      resolve(data);
     };
     checkbox.addEventListener('change', activate);
     const remaining = Math.max(0, Math.min(600000, challenge.expires_at * 1000 - Date.now()));
-    const timer = setTimeout(() => { cleanup(); reject(new Error('Challenge expired')); }, remaining);
+    const timer = setTimeout(() => { cleanup(); label.remove(); reject(new Error('Challenge expired')); }, remaining);
     signal.addEventListener('abort', abort, {once: true});
     if (signal.aborted) abort();
   });
@@ -146,18 +145,22 @@ export function collectBehavior(element, challenge, signal, locale) {
 export class GateveriqWidget {
   constructor(element) { this.element=element; this.running=false; }
   cancel() { this.controller?.abort(); this.worker?.terminate(); this.reject?.(new Error('Cancelled')); this.reject=null; }
-  async verify(challenge, {solutionURL, signal, locale}={}) {
+  async verify(challenge, {solutionURL, signal, locale, compact=false, onChecking}={}) {
     if(this.running) throw Error('Verification already running');
     this.running=true; this.controller=new AbortController();
     let stopLoading;
     const cancel=()=>this.cancel(); signal?.addEventListener('abort',cancel,{once:true});
-    this.element.setAttribute('role','status'); this.element.setAttribute('aria-live','polite');
     const t = visualMessages[resolveLocale(this.element, locale)];
-    this.element.textContent=t.checking;
+    if (!compact) {
+      this.element.setAttribute('role','status'); this.element.setAttribute('aria-live','polite');
+      this.element.textContent=t.checking;
+    }
     try {
       if(signal?.aborted) throw Error('Cancelled');
-      const behavior = await collectBehavior(this.element, challenge, this.controller.signal, locale);
-      stopLoading = showLoading(this.element, t.checking);
+      const behavior = await collectBehavior(this.element, challenge, this.controller.signal, locale, {keepCheckbox:compact});
+      onChecking?.();
+      if (compact) this.element.setAttribute('aria-busy', 'true');
+      else stopLoading = showLoading(this.element, t.checking);
       const nonce=await new Promise((resolve,reject)=>{
         this.reject=reject; this.worker=new Worker(workerURL);
         this.worker.onmessage=({data})=>data.error?reject(Error(data.error)):resolve(data.nonce);
@@ -175,14 +178,20 @@ export class GateveriqWidget {
       }
       if(!response.ok) throw Error(result.error?.code || 'Verification failed');
       if (typeof result.verification_token !== 'string' || !result.verification_token) throw Error('Missing verification token');
-      this.element.textContent=t.completed;return result.verification_token;
-    } catch(error){this.element.textContent=t.failed;throw error;}
-    finally{stopLoading?.();this.worker?.terminate();this.reject=null;this.running=false;signal?.removeEventListener('abort',cancel);}
+      if (!compact) this.element.textContent = t.completed;
+      return result.verification_token;
+    } catch (error) {
+      this.element.textContent = compact ? '' : t.failed;
+      throw error;
+    } finally {
+      if (compact) this.element.removeAttribute('aria-busy');
+      stopLoading?.();this.worker?.terminate();this.reject=null;this.running=false;signal?.removeEventListener('abort',cancel);
+    }
   }
 }
 
 /** Use an attempt prepared by your backend, never an integration secret. */
-export async function verifyWebsiteAttempt(element, attempt, {serviceURL, signal = new AbortController().signal, locale, theme = 'auto', styleNonce} = {}) {
+export async function verifyWebsiteAttempt(element, attempt, {serviceURL, signal = new AbortController().signal, locale, theme = 'auto', styleNonce, compact = false, onChecking} = {}) {
   locale = resolveLocale(element, locale);
   if (attempt.decision === 'additional_verification_required') {
     if (attempt.visual && attempt.challenge) {
@@ -194,7 +203,7 @@ export async function verifyWebsiteAttempt(element, attempt, {serviceURL, signal
   const solutionURL = new URL('/public/v1/web/solutions', serviceURL).href;
   const widget = new GateveriqWidget(element);
   try {
-    const verification_token = await widget.verify(attempt.challenge, {solutionURL, signal, locale});
+    const verification_token = await widget.verify(attempt.challenge, {solutionURL, signal, locale, compact, onChecking});
     return {decision: 'verified', verification_token};
   } catch (error) {
     if (error.decision === 'additional_verification_required') {
@@ -215,68 +224,90 @@ export function selectSlider(element, visual, signal, message = '', {locale, the
     return Promise.reject(Error('Invalid slider task'));
   }
   return new Promise((resolve, reject) => {
+    const stage = sliderStage(visual);
+    if (!stage) return reject(Error(t.failed));
     const root = sliderRoot(element, theme, styleNonce);
     const card = document.createElement('section'); card.className = 'card'; card.lang = language;
     const heading = document.createElement('p'); heading.className = 'heading';
     heading.id = 'instruction'; heading.textContent = t.instruction;
-    const stage = document.createElement('div'); stage.className = 'stage';
-    const background = document.createElement('img'); background.className = 'background';
-    background.alt = ''; background.draggable = false;
-    const piece = document.createElement('img'); piece.className = 'piece';
-    piece.alt = ''; piece.draggable = false;
-    piece.style.width = `${visual.piece_size / visual.width * 100}%`;
-    piece.style.top = `${visual.piece_y / visual.height * 100}%`;
-    piece.style.left = '0%';
-    stage.append(background, piece);
+    const background = document.createElement('img');
+    const piece = document.createElement('img');
     const track = document.createElement('div'); track.className = 'track';
     const hint = document.createElement('span'); hint.className = 'track-label'; hint.textContent = t.drag;
     const handle = document.createElement('span'); handle.className = 'handle'; handle.textContent = '→';
-    handle.style.left = '2px'; handle.setAttribute('aria-hidden','true');
+    handle.setAttribute('aria-hidden','true');
     const range = document.createElement('input'); range.type = 'range';
     range.min = '0'; range.max = String(visual.max_position); range.step = '1'; range.value = '0';
     range.setAttribute('aria-label', t.position); range.setAttribute('aria-describedby','instruction help');
+    range.setAttribute('aria-keyshortcuts', 'Enter Space');
     range.disabled = true;
     track.append(hint, handle, range);
-    const footer = document.createElement('div'); footer.className = 'footer';
     const note = document.createElement('p'); note.className = 'note'; note.id = 'help';
     note.setAttribute('role','status'); note.setAttribute('aria-live','polite'); note.textContent = t.loading;
-    const confirm = document.createElement('button'); confirm.type = 'button';
-    confirm.textContent = t.confirm; confirm.disabled = true;
-    footer.append(note, confirm); card.append(heading, stage, track, footer); root.append(card);
-    let loaded = 0, pointer = false, settled = false;
+    card.append(heading, stage.canvas, track, note); root.append(card);
+    let loaded = 0, pointerId = null, settled = false;
     const listeners = [];
     const listen = (target, event, callback) => { target.addEventListener(event, callback); listeners.push([target,event,callback]); };
     const cleanup = () => {
       clearTimeout(timer);
       for (const [target,event,callback] of listeners) target.removeEventListener(event,callback);
     };
-    const fail = error => { if (settled) return; settled = true; cleanup(); range.disabled = confirm.disabled = true; reject(error); };
+    const fail = error => { if (settled) return; settled = true; cleanup(); range.disabled = true; reject(error); };
     const submit = () => {
-      const position = Number(range.value);
+      const position = range.valueAsNumber;
       if (settled || loaded !== 2 || !Number.isInteger(position) || position <= 0 || position > visual.max_position) return;
       if (Date.now() >= visual.expires_at * 1000) return fail(Error(t.expired));
-      settled = true; cleanup(); range.disabled = confirm.disabled = true; resolve(position);
+      settled = true; cleanup(); range.disabled = true; resolve(position);
     };
-    listen(range,'input',() => {
-      const position = Math.max(0,Math.min(visual.max_position,Number(range.value) || 0));
-      piece.style.left = `${position / visual.width * 100}%`;
-      handle.style.left = `calc(${position / visual.max_position * 100}% - ${position / visual.max_position * 38 - 2}px)`;
+    const renderPosition = () => {
+      if (loaded !== 2) return;
+      const position = range.valueAsNumber;
+      stage.draw(background, piece, position);
+      track.style.setProperty('--slider-progress', `${position / visual.max_position * 100}%`);
       hint.style.opacity = position > 0 ? '0' : '1';
-      confirm.disabled = loaded !== 2 || position === 0;
+    };
+    const moveFromPointer = event => {
+      const handleWidth = handle.offsetWidth;
+      const travel = track.clientWidth - handleWidth;
+      if (travel <= 0) return;
+      const left = track.getBoundingClientRect().left + track.clientLeft;
+      const offset = event.clientX - left - handleWidth / 2;
+      range.valueAsNumber = Math.round(Math.max(0, Math.min(travel, offset)) / travel * visual.max_position);
+      renderPosition();
+    };
+    listen(range, 'input', renderPosition);
+    listen(track, 'pointerdown', event => {
+      if (range.disabled || event.button !== 0 || pointerId !== null) return;
+      track.setPointerCapture(event.pointerId);
+      pointerId = event.pointerId;
+      range.focus({preventScroll: true});
+      moveFromPointer(event);
     });
-    listen(range,'pointerdown',() => { pointer = true; });
-    listen(range,'pointercancel',() => { pointer = false; });
-    listen(range,'change',() => { if (pointer) submit(); pointer = false; });
+    listen(track, 'pointermove', event => {
+      if (event.pointerId === pointerId) moveFromPointer(event);
+    });
+    listen(track, 'pointerup', event => {
+      if (event.pointerId !== pointerId) return;
+      moveFromPointer(event);
+      pointerId = null;
+      submit();
+    });
+    const endDrag = event => { if (event.pointerId === pointerId) pointerId = null; };
+    listen(track, 'pointercancel', endDrag);
+    listen(track, 'lostpointercapture', endDrag);
     listen(range,'keydown',event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); submit(); }
     });
-    listen(confirm,'click',submit);
     listen(signal,'abort',() => fail(Error(t.cancelled)));
     const timer = setTimeout(() => fail(Error(t.expired)), Math.max(0, Math.min(120000,visual.expires_at * 1000 - Date.now())));
     for (const [img,src] of [[background,visual.background],[piece,visual.piece]]) {
       listen(img,'load',() => {
         loaded++;
-        if (loaded === 2 && !settled) { range.disabled = false; note.textContent = message || t.ready; }
+        if (loaded === 2 && !settled) {
+          renderPosition();
+          range.disabled = false;
+          note.textContent = message;
+        }
       });
       listen(img,'error',() => fail(Error(t.failed)));
       img.src = src;

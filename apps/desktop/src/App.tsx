@@ -10,8 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { HistoryVersion } from "./HistoryVersion";
 import { Attachments } from "./Attachments";
 import { ConfirmNewEntry } from "./ConfirmNewEntry";
-import { VerificationInline } from "./VerificationInline";
-import { VerificationDialog } from "./VerificationDialog";
+import { VerificationFrame } from "./VerificationFrame";
 import { useI18n, setSystemLocale } from "./i18n";
 import { Icon } from "./Icon";
 import { ArchiveDialog } from "./ArchiveDialog";
@@ -106,12 +105,10 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [server, setServer] = useState("");
   const [login, setLogin] = useState("");
-  const [verificationSecret, setVerificationSecret] = useState<string | null>(null);
-  const [verificationRevision, setVerificationRevision] = useState(0);
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [mode, setMode] = useState<"login" | "register" | "verify">("login");
-  const [registrationVerificationSlot, setRegistrationVerificationSlot] = useState<HTMLDivElement | null>(null);
+  const [verificationSlot, setVerificationSlot] = useState<HTMLDivElement | null>(null);
   const [offline, setOffline] = useState("");
   const offlineProfile = transferSource ? "" : offline;
   const [code, setCode] = useState("");
@@ -733,14 +730,7 @@ export default function App() {
         throw new Error("ui.checkLaunchArguments");
       if (certReady) throw new Error("ui.saveTheRecoveryFileFirst");
       if (offlineProfile) await call("unlock_offline", { id: offlineProfile, password });
-      else {
-        try {
-          await call("login", { server, login, password, verification_secret: verificationSecret });
-        } finally {
-          setVerificationSecret(null);
-          setVerificationRevision((value) => value + 1);
-        }
-      }
+      else await call("login", { server, login, password });
       setPassword("");
       setNeedsSync(false);
       await refresh();
@@ -760,6 +750,20 @@ export default function App() {
       setMode("verify");
     });
   }
+  function returnToRegistration() {
+    setMode("register");
+    setPassword("");
+    setCode("");
+    setTicket("");
+    setCertReady(false);
+  }
+  async function cancelRegistration() {
+    if (busy) return;
+    await run(async () => {
+      await call("register_cancel");
+      returnToRegistration();
+    });
+  }
   async function finishRegistration() {
     if (busy || !code.trim()) return;
     await run(async () => {
@@ -767,21 +771,17 @@ export default function App() {
         await call("register_finish", { server, code });
       } catch (error) {
         if (errorText(error) === "ui.registrationRestartRequired") {
-          setMode("register");
+          returnToRegistration();
           setLogin("");
           setEmail("");
-          setPassword("");
-          setCode("");
-          setTicket("");
           setRecovery(true);
-          setCertReady(false);
-          setVerificationSecret(null);
         }
         throw error;
       }
       setCertReady(recovery);
       setMode("login");
       setCode("");
+      setTicket("");
       setNotice(
         recovery
           ? "ui.accountCreatedSaveTheRecoveryFileBeforeSigningInThisFileCannotBeRetrievedAfterTheApplicationCloses"
@@ -923,7 +923,6 @@ export default function App() {
           setServer(destination);
           setOtherServer(!destination);
           setLogin("");
-          setVerificationSecret(null);
           setTransferSource(source);
           setMode("login");
         }}
@@ -939,7 +938,7 @@ export default function App() {
           context(e);
       }}
     >
-      <VerificationDialog inlineTarget={mode === "login" ? undefined : registrationVerificationSlot} />
+      <VerificationFrame target={verificationSlot} />
       {archiveRequest && status.unlocked && (
         <ArchiveDialog
           request={archiveRequest}
@@ -1134,11 +1133,13 @@ export default function App() {
               <Icon name="account" /><span>{t("ui.accountPage")}</span>
             </button>
           )}
-          <button className={page === "imports" ? "nav active" : "nav"}
-            aria-current={page === "imports" ? "page" : undefined}
-            onClick={() => requestLeave(() => setPage("imports"))}>
-            <Icon name="import" /><span>{t("ui.imports")}</span>
-          </button>
+          {status.unlocked && (
+            <button className={page === "imports" ? "nav active" : "nav"}
+              aria-current={page === "imports" ? "page" : undefined}
+              onClick={() => requestLeave(() => setPage("imports"))}>
+              <Icon name="import" /><span>{t("ui.imports")}</span>
+            </button>
+          )}
           <button
             className={page === "settings" ? "nav active" : "nav"}
             onClick={() => setPage(page === "settings" ? "vault" : "settings")}
@@ -1160,7 +1161,6 @@ export default function App() {
               <br />
               {t("ui.onYourDevice")}
             </p>
-            <small>{t("ui.testDataOnly")}</small>
           </div>
         </div>
       </aside>
@@ -1293,10 +1293,15 @@ export default function App() {
                       : t("ui.unlockVault")}
                 </h2>
                 {mode === "verify" && <p className="muted">
-                  {t("ui.inThisPrototypeEmailIsSavedInTheServerSPrivateDevOutbox")}
+                  {t("ui.emailIsSavedInServerOutbox")}
                 </p>}
                 {mode === "verify" ? (
-                  <>
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void finishRegistration();
+                    }}
+                  >
                     <label>
                       {t("ui.emailCode")}
                       <input
@@ -1309,18 +1314,25 @@ export default function App() {
                       {t("ui.emailFile")}
                       {ticket}.txt
                     </p>
-                    <button
-                      className="primary full"
-                      disabled={busy || !code.trim()}
-                      onClick={finishRegistration}
-                    >
-                      {t("ui.confirm")}
-                    </button>
-                  </>
+                    <div className="auth-links">
+                      <button type="submit" className="primary" disabled={busy || !code.trim()}>
+                        {t("ui.confirm")}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() => void cancelRegistration()}
+                      >
+                        {t("ui.cancel")}
+                      </button>
+                    </div>
+                  </form>
                 ) : (
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
+                      if (busy) return;
                       void (mode === "register" ? register() : signIn());
                     }}
                   >
@@ -1404,6 +1416,7 @@ export default function App() {
                             value={login}
                             onChange={(e) => setLogin(e.target.value)}
                             autoComplete="username"
+                            required={mode === "login"}
                             aria-describedby={mode === "register" ? "registration-login-help" : undefined}
                           />
                           {mode === "register" && <small id="registration-login-help">{t("ui.loginRequirements")}</small>}
@@ -1434,11 +1447,6 @@ export default function App() {
                         required
                       />
                     </label>
-                    {mode === "login" && !offlineProfile && <VerificationInline
-                      key={`${mode}:${verificationRevision}`}
-                      server={server} login={login} email="" kind="login"
-                      onReady={setVerificationSecret}
-                    />}
                     {mode === "register" && (
                       <label className="check">
                         <input
@@ -1453,7 +1461,6 @@ export default function App() {
                       className="primary full"
                       disabled={
                         busy ||
-                        (mode === "login" && !offlineProfile && verificationSecret === null) ||
                         certReady ||
                         !configured ||
                         !!launch.startup_error
@@ -1465,7 +1472,7 @@ export default function App() {
                           ? t("ui.createAccount")
                           : t("ui.unlockVaultLabel")}
                     </button>
-                    {mode === "register" && <div ref={setRegistrationVerificationSlot} />}
+                    <div ref={setVerificationSlot} />
                   </form>
                 )}
                 {certReady && (
@@ -1485,7 +1492,7 @@ export default function App() {
                     {t("ui.saveRecoveryFile")}
                   </button>
                 )}
-                <div className="auth-links">
+                {mode !== "verify" && <div className="auth-links">
                   <button
                     type="button"
                     className="secondary"
@@ -1494,7 +1501,6 @@ export default function App() {
                     }
                     onClick={() => {
                       setMode(mode === "register" ? "login" : "register");
-                      setVerificationSecret(null);
                       setOffline("");
                       setError("");
                     }}
@@ -1526,11 +1532,8 @@ export default function App() {
                   >
                     {t("ui.recoverAccess")}
                   </button>
-                </div>
-                <div className="auth-local-actions">{localTools}</div>
-                <div className="local-warning">
-                  {t("ui.prototypeDoNotStoreRealSecrets")}
-                </div>
+                </div>}
+                {mode !== "verify" && <div className="auth-local-actions">{localTools}</div>}
               </section>
             </div>
           ) : (
@@ -1854,7 +1857,13 @@ export default function App() {
                           />
                         </label>
                       </div>
-                      <IconEditor value={draft.icon} builtin={draft.keepass_icon_id} onChange={(icon) => setDraft(current => current ? { ...current, icon, keepass_icon_id: undefined } : current)} />
+                      <IconEditor
+                        key={`icon-${status.profile}-${selected?.record_id ?? "new"}`}
+                        name={draft.record_type}
+                        value={draft.icon}
+                        builtin={draft.keepass_icon_id}
+                        onChange={(icon) => setDraft(current => current ? { ...current, icon, keepass_icon_id: undefined } : current)}
+                      />
                       <button
                         className="primary full"
                         disabled={

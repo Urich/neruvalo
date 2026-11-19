@@ -460,6 +460,10 @@ async fn command(
                 c.register_finish(&text(r, "server")?, &text(r, "code")?)
                     .await
             }
+            "register_cancel" => {
+                c.register_cancel();
+                Ok(Value::Null)
+            }
             "login" => {
                 c.set_verification_secret(r["verification_secret"].as_str().map(str::to_owned));
                 let password = secret(r, "password")?;

@@ -79,10 +79,10 @@ impl ServerConfig {
         Ok(config)
     }
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.dev_mode, "This prototype requires dev_mode = true in the server config (or legacy NERUVALO_DEV_MODE=true)");
+        ensure!(self.dev_mode, "Set dev_mode = true in the server config or use the legacy NERUVALO_DEV_MODE=true setting");
         ensure!(
             self.listen.ip().is_loopback(),
-            "Prototype must listen on loopback"
+            "The server must listen on a loopback address"
         );
         ensure!(
             !self.database_url.trim().is_empty(),

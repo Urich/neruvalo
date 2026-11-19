@@ -45,7 +45,6 @@ export function About() {
       <p>
         {t("ui.about")} · {version}
       </p>
-      <p>{t("ui.prototypeDoNotStoreRealSecrets")}</p>
       <p>
         {t(
           "ui.anOpenSourceSelfHostedPasswordAndSecretsManager",

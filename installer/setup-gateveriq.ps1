@@ -127,7 +127,7 @@ set "NERUVALO_GATE_SECRET=$($integration.integration_secret)"
 set "NERUVALO_GATE_INTERNAL=$GateInternal"
 set "NERUVALO_GATE_PUBLIC=$GatePublic"
 set "NERUVALO_PUBLIC_ORIGIN=$origin"
-echo Neruvalo prototype server: $origin
+echo Neruvalo server: $origin
 echo Keep GateVeriq running with the config used during setup.
 echo Email confirmation codes: local-data\dev-outbox
 "%~dp0neruvalo-server.exe"

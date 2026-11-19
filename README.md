@@ -2,9 +2,9 @@
 
 An open-source, self-hosted password and secrets manager built with Rust, React and Tauri.
 
-**Status: early development prototype. Test data only. No production security audit.**
+**Status: in development. No production security audit.**
 
-## Try the prototype
+## Run Neruvalo
 
 Work is on [`prototype/desktop-core`](https://github.com/Urich/neruvalo/tree/prototype/desktop-core). Changes are not merged into `main` without the repository owner's request.
 
@@ -13,7 +13,7 @@ Work is on [`prototype/desktop-core`](https://github.com/Urich/neruvalo/tree/pro
 
 Implemented: real OPAQUE authentication, client-side authenticated encryption, signed record history, version conflicts, archive/restore, encrypted SQLite offline read-only cache and recovery certificates. The desktop UI includes all eight agreed secret types.
 
-The server deliberately runs on loopback in development mode. Email verification uses a private local outbox. Production SMTP/CAPTCHA, sharing, imports/exports, Windows Hello and mobile clients are not implemented yet. See the prototype guide for the exact status.
+The server deliberately runs on loopback in development mode. Email verification uses a private local outbox. Production SMTP/CAPTCHA, sharing, imports/exports, Windows Hello and mobile clients are not implemented yet. See the run guide for the exact status.
 
 ## Architecture
 
@@ -59,4 +59,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Never co
 
 GNU Affero General Public License version 3 only (`AGPL-3.0-only`). See [LICENSE](LICENSE).
 
-Implementation status and remaining specification work: [docs/implementation-status.ru.md](docs/implementation-status.ru.md). Prototype 0.4.0 uses protocol/database schema 3 (record signatures 2, backup 2) and record/shared-copy payload 3 with independently encrypted file blocks. Recreate old test vaults and update all clients; see [database integrity](docs/database-integrity.md) and [the file format](docs/local-vault.md#separate-encrypted-file-blocks-payload-3-15-november-2026). Use the packaged `start-desktop.cmd` for a separate cache.
+Implementation status and remaining specification work: [docs/implementation-status.ru.md](docs/implementation-status.ru.md). Neruvalo 0.4.0 uses protocol/database schema 3 (record signatures 2, backup 2) and record/shared-copy payload 3 with independently encrypted file blocks. Recreate old test vaults and update all clients; see [database integrity](docs/database-integrity.md) and [the file format](docs/local-vault.md#separate-encrypted-file-blocks-payload-3-15-november-2026). Use the packaged `start-desktop.cmd` for a separate cache.
